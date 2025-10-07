@@ -3,14 +3,17 @@ import React, { useMemo, useState, useEffect } from "react";
 import { createStudent } from "../api";
 import InvitePreview from "./InvitePreview";
 import { useNavigate } from "react-router-dom";
+import { fetchDownloadAsBlob } from "../api";
 
 /**
- * Upgraded AdminForm:
- * - Event creation + guest limit
- * - Generate invites (calls createStudent)
- * - Persistent "history" of generated invites saved in localStorage
- * - Export CSV for current batch or entire history
- * - DU-themed, responsive, includes Scanner link
+ * Upgraded AdminForm (drop-in replacement)
+ * - Export CSV for current batch or full history
+ * - Per-invite direct PDF download (fetch -> save)
+ * - Bulk "Download all PDFs" (sequential)
+ * - No requirement to "create twice" to enable download
+ *
+ * NOTE: If you plan to download many PDFs at once (100+), consider
+ * adding a server-side ZIP endpoint to avoid browser multiple-download limits.
  */
 
 /* ---------------- Palette & base styles ---------------- */
@@ -31,7 +34,9 @@ const baseBtn = {
   border: "1px solid transparent",
 };
 
-/* ---------------- Helpers ---------------- */
+const STORAGE_KEY = "du.invites.history.v1";
+
+/* ---------------- Utilities ---------------- */
 function downloadCSV(rows = [], filename = "invites.csv") {
   if (!rows || rows.length === 0) return;
   const headers = Object.keys(rows[0]);
@@ -55,7 +60,55 @@ function downloadCSV(rows = [], filename = "invites.csv") {
   URL.revokeObjectURL(url);
 }
 
-const STORAGE_KEY = "du.invites.history.v1";
+/**
+ * Download a single file (PDF) by fetching and saving it.
+ * Uses fetch to get blob and triggers a client download.
+ */
+async function downloadFile(url, filename) {
+  if (!url) throw new Error("No URL");
+  const resp = await fetch(url, { cache: "no-store" });
+  if (!resp.ok) throw new Error(`Failed to fetch ${resp.status}`);
+  const blob = await resp.blob();
+  const a = document.createElement("a");
+  const objectUrl = URL.createObjectURL(blob);
+  a.href = objectUrl;
+  a.download = filename || "invite.pdf";
+  // append to DOM to make Safari happy
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 5000);
+}
+
+/**
+ * Download all files sequentially. This keeps memory usage low and
+ * avoids firing lots of simultaneous requests that could get blocked.
+ *
+ * NOTE: browsers may block multiple downloads or require user interaction.
+ * For large batches consider a server-side ZIP endpoint (recommended).
+ */
+async function downloadAllSequential(rows, onProgress = () => {}) {
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const url = r.downloadUrl || r.publicUrl || "";
+    const filename = r.filename || `invite-${i + 1}.pdf`;
+    try {
+      if (!url) {
+        onProgress(i + 1, rows.length, `No URL for ${filename}`);
+        continue;
+      }
+      onProgress(i + 1, rows.length, `Downloading ${filename}...`);
+      // eslint-disable-next-line no-await-in-loop
+      await downloadFile(url, filename);
+      // small pause between downloads so browser doesn't choke
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((res) => setTimeout(res, 350));
+    } catch (err) {
+      onProgress(i + 1, rows.length, `Failed: ${err?.message || err}`);
+    }
+  }
+  onProgress(rows.length, rows.length, "Done");
+}
 
 /* ---------------- Component ---------------- */
 export default function AdminForm() {
@@ -81,7 +134,7 @@ export default function AdminForm() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
 
-  // generated for current session/batch
+  // generated for current session/batch (returned by server)
   const [generated, setGenerated] = useState([]);
 
   // persistent history (all previously generated invites)
@@ -93,6 +146,9 @@ export default function AdminForm() {
       return [];
     }
   });
+
+  // UI: download progress for bulk
+  const [bulkProgress, setBulkProgress] = useState({ i: 0, total: 0, msg: "" });
 
   // responsive
   const [isNarrow, setIsNarrow] = useState(window.innerWidth < 940);
@@ -144,7 +200,7 @@ export default function AdminForm() {
 
   // submit -> create invites via API
   async function onSubmit(e) {
-    e.preventDefault();
+    e?.preventDefault();
     if (!canGenerate) {
       setStatus(
         "Please provide student details and at least one guest (name + phone)."
@@ -173,11 +229,12 @@ export default function AdminForm() {
         setGenerated([]);
       } else {
         const files = out.files || [];
-        setGenerated(files);
+        // ensure files is an array even if server returns a single object
+        setGenerated(Array.isArray(files) ? files : [files]);
         setStatus("Done — invites generated.");
 
         // append to history: create friendly entries (one row per guest)
-        const newRows = files.map((f) => ({
+        const newRows = (Array.isArray(files) ? files : [files]).map((f) => ({
           id: f.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           createdAt: new Date().toISOString(),
           eventTitle: event.title,
@@ -190,13 +247,13 @@ export default function AdminForm() {
           guestName: f.guestName,
           guestPhone: f.phone,
           token: f.token,
-          publicUrl: f.downloadUrl || f.publicUrl || "",
+          publicUrl: f.publicUrl || "",
+          downloadUrl: f.downloadUrl || "",
           filename: f.filename || "",
         }));
 
         setHistory((prev) => {
           const merged = [...newRows, ...prev];
-          // keep growth reasonable: cap at 5000 entries (you can change)
           return merged.slice(0, 5000);
         });
       }
@@ -208,7 +265,7 @@ export default function AdminForm() {
     }
   }
 
-  // CSV helpers
+  // CSV rows (current batch + full history)
   const currentBatchCsvRows = useMemo(
     () =>
       generated.map((r) => ({
@@ -219,6 +276,7 @@ export default function AdminForm() {
         matricNo: student.matricNo,
         token: r.token,
         publicUrl: r.downloadUrl || r.publicUrl || "",
+        filename: r.filename || "",
       })),
     [generated, student]
   );
@@ -237,13 +295,29 @@ export default function AdminForm() {
         guestName: h.guestName,
         guestPhone: h.guestPhone,
         token: h.token,
-        publicUrl: h.publicUrl,
-        filename: h.filename,
+        publicUrl: h.publicUrl || h.downloadUrl || "",
+        filename: h.filename || "",
       })),
     [history]
   );
 
-  // small UI injected styles (keeps file self-contained)
+  // group history by student for listing
+  const historyByStudent = useMemo(() => {
+    const map = new Map();
+    for (const row of history) {
+      const key = `${row.matricNo}::${row.studentName}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(row);
+    }
+    return Array.from(map.entries()).map(([k, v]) => ({
+      key: k,
+      student: v[0].studentName,
+      matricNo: v[0].matricNo,
+      rows: v,
+    }));
+  }, [history]);
+
+  // inline CSS
   const injectedCss = `
     .du-app { background: ${
       PALETTE.softBg
@@ -284,27 +358,61 @@ export default function AdminForm() {
     }; vertical-align:top; }
     .du-hint { color:${PALETTE.muted}; font-size:13px; }
     .du-top-actions { margin-left:auto; display:flex; gap:8px; align-items:center; }
-    @media (max-width: 980px) {
-      .du-grid { grid-template-columns: 1fr; }
-      .du-topbar { flex-direction:column; align-items:flex-start; gap:8px; }
-    }
+    @media (max-width: 980px) { .du-grid { grid-template-columns: 1fr; } .du-topbar { flex-direction:column; align-items:flex-start; gap:8px; } }
   `;
 
-  // group history by student for a nicer listing (optional)
-  const historyByStudent = useMemo(() => {
-    const map = new Map();
-    for (const row of history) {
-      const key = `${row.matricNo}::${row.studentName}`;
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(row);
+  /* ---------------- Actions available in UI ---------------- */
+
+  // download a single generated invite PDF (prefer downloadUrl)
+  async function handleDownloadSingle(r) {
+    try {
+      setStatus(`Downloading ${r.filename || "invite.pdf"}...`);
+      const url = r.downloadUrl || r.publicUrl || "";
+      if (!url) throw new Error("No download URL available for this invite.");
+      await downloadFile(
+        url,
+        r.filename || `invite-${r.token || Date.now()}.pdf`
+      );
+      setStatus("Downloaded.");
+    } catch (err) {
+      setStatus(`Download failed: ${err?.message || err}`);
     }
-    return Array.from(map.entries()).map(([k, v]) => ({
-      key: k,
-      student: v[0].studentName,
-      matricNo: v[0].matricNo,
-      rows: v,
-    }));
-  }, [history]);
+  }
+
+  // somewhere in AdminForm.jsx (if you want to use fetchDownloadAsBlob)
+
+  async function handleDownloadUsingApi(downloadUrl, filename) {
+    const { ok, blob, error } = await fetchDownloadAsBlob(downloadUrl);
+    if (!ok) {
+      alert("Download failed: " + (error || "unknown"));
+      return;
+    }
+    const a = document.createElement("a");
+    const objectUrl = URL.createObjectURL(blob);
+    a.href = objectUrl;
+    a.download = filename || "invite.pdf";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 5000);
+  }
+
+  // bulk download for provided rows (current batch or history subset)
+  async function handleDownloadAll(rows) {
+    if (!rows || rows.length === 0) return;
+    // warn user about many downloads
+    if (rows.length > 20) {
+      const ok = window.confirm(
+        `You are about to download ${rows.length} files. This may open many browser prompts or be blocked. For large batches consider generating a server-side ZIP instead. Continue?`
+      );
+      if (!ok) return;
+    }
+    setBulkProgress({ i: 0, total: rows.length, msg: "Starting..." });
+    await downloadAllSequential(rows, (i, total, msg) =>
+      setBulkProgress({ i, total, msg })
+    );
+    setTimeout(() => setBulkProgress({ i: 0, total: 0, msg: "" }), 2000);
+  }
 
   return (
     <div className="du-app" role="main">
@@ -326,13 +434,12 @@ export default function AdminForm() {
         <div className="du-top-actions" aria-hidden={false}>
           <button
             className="du-btn du-ghost"
-            onClick={() => {
-              // export full history
+            onClick={() =>
               downloadCSV(
                 fullHistoryCsvRows,
                 `invites_history_${new Date().toISOString().slice(0, 10)}.csv`
-              );
-            }}
+              )
+            }
             title="Export full history"
           >
             Export full CSV
@@ -699,10 +806,10 @@ export default function AdminForm() {
                 >
                   Export current batch CSV
                 </button>
+
                 <button
                   className="du-btn du-ghost"
                   onClick={() => {
-                    // clear history (confirm)
                     if (
                       !window.confirm(
                         "Clear all saved invite history? This cannot be undone locally."
@@ -718,7 +825,32 @@ export default function AdminForm() {
                 >
                   Clear history
                 </button>
+
+                <button
+                  className="du-btn du-primary"
+                  style={{ marginLeft: "auto" }}
+                  disabled={!generated.length}
+                  onClick={() =>
+                    handleDownloadAll(
+                      generated.map((r) => ({
+                        downloadUrl: r.downloadUrl,
+                        publicUrl: r.publicUrl,
+                        filename:
+                          r.filename || `invite-${r.token || Date.now()}.pdf`,
+                      }))
+                    )
+                  }
+                >
+                  Download all PDFs (batch)
+                </button>
               </div>
+
+              {/* download progress */}
+              {bulkProgress.total > 0 && (
+                <div style={{ marginBottom: 8, color: PALETTE.muted }}>
+                  {bulkProgress.i}/{bulkProgress.total} — {bulkProgress.msg}
+                </div>
+              )}
 
               {/* results table for current batch */}
               {generated.length > 0 && (
@@ -782,6 +914,20 @@ export default function AdminForm() {
                                 }}
                               >
                                 {publicUrl && (
+                                  <button
+                                    className="du-btn du-ghost"
+                                    onClick={() =>
+                                      handleDownloadSingle({
+                                        downloadUrl: r.downloadUrl,
+                                        publicUrl: r.publicUrl,
+                                        filename: filename,
+                                      })
+                                    }
+                                  >
+                                    Download
+                                  </button>
+                                )}
+                                {publicUrl && (
                                   <a
                                     href={publicUrl}
                                     target="_blank"
@@ -789,18 +935,6 @@ export default function AdminForm() {
                                   >
                                     <button className="du-btn du-ghost">
                                       Open
-                                    </button>
-                                  </a>
-                                )}
-                                {publicUrl && (
-                                  <a
-                                    href={publicUrl}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    download={filename}
-                                  >
-                                    <button className="du-btn du-ghost">
-                                      Download
                                     </button>
                                   </a>
                                 )}
@@ -884,6 +1018,22 @@ export default function AdminForm() {
                               }
                             >
                               Export student CSV
+                            </button>
+                            <button
+                              className="du-btn du-primary"
+                              onClick={() =>
+                                handleDownloadAll(
+                                  grp.rows.map((r) => ({
+                                    downloadUrl: r.downloadUrl,
+                                    publicUrl: r.publicUrl,
+                                    filename:
+                                      r.filename ||
+                                      `${grp.matricNo}_${r.guestName}.pdf`,
+                                  }))
+                                )
+                              }
+                            >
+                              Download student PDFs
                             </button>
                           </div>
                         </div>

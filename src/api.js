@@ -1,5 +1,4 @@
-// client/src/api.js  (CRA-only)
-
+// client/src/api.js
 import { auth } from "./firebaseClient";
 import {
   signInWithEmailAndPassword,
@@ -7,9 +6,7 @@ import {
   onAuthStateChanged,
 } from "firebase/auth";
 
-// CRA reads env vars prefixed with REACT_APP_ at build time.
-// Set REACT_APP_API in client/.env (e.g. http://localhost:8080).
-// If not set, we’ll fall back to same-origin, then localhost.
+// API base (set REACT_APP_API in client/.env to override)
 const API =
   process.env.REACT_APP_API ||
   (typeof window !== "undefined"
@@ -41,28 +38,31 @@ export async function logout() {
   }
 }
 
-/** Quick auth check used by routing/guards */
 export function isAuthed() {
   return !!auth.currentUser;
 }
-// Optional: listener if you need it elsewhere
 export function onAuth(cb) {
   return onAuthStateChanged(auth, cb);
 }
 
-/** Admin: create PDFs */
+/** Helper to add Authorization header when idToken exists */
+async function authHeaders() {
+  const t = await idToken();
+  return t ? { Authorization: `Bearer ${t}` } : {};
+}
+
+/** Admin: create PDFs (removed credentials: 'include' to avoid CORS preflight credential mismatch unless you specifically need cookies) */
 export async function createStudent(payload) {
   try {
-    const t = await idToken();
-    if (!t) return { ok: false, error: "Unauthorized" };
+    const headers = {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    };
     const r = await fetch(`${API}/admin/students`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${t}`,
-      },
+      headers,
       body: JSON.stringify(payload),
-      credentials: "include",
+      // NOTE: do NOT use credentials: "include" here unless server CORS uses credentials:true AND cookies are required.
     });
     return await r.json();
   } catch (e) {
@@ -70,17 +70,16 @@ export async function createStudent(payload) {
   }
 }
 
-/** Scanner: check token (expects JSON endpoints on server) */
+/** Scanner: check token */
 export async function verifyCheck(token) {
   try {
-    const t = await idToken();
-    if (!t) return { ok: false, error: "Unauthorized" };
+    const headers = {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    };
     const r = await fetch(`${API}/verify-json/check`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${t}`,
-      },
+      headers,
       body: JSON.stringify({ token }),
     });
     return await r.json();
@@ -92,14 +91,13 @@ export async function verifyCheck(token) {
 /** Scanner: mark token USED (atomic) */
 export async function verifyUse(token) {
   try {
-    const t = await idToken();
-    if (!t) return { ok: false, error: "Unauthorized" };
+    const headers = {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    };
     const r = await fetch(`${API}/verify-json/use`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${t}`,
-      },
+      headers,
       body: JSON.stringify({ token }),
     });
     return await r.json();
@@ -107,3 +105,32 @@ export async function verifyUse(token) {
     return { ok: false, error: e?.message || "Network error" };
   }
 }
+
+/**
+ * Download proxy: use this when calling server /admin/download (server will stream and set Content-Disposition).
+ * If the server requires auth, we include Authorization header. This returns a blob; callers typically call URL.createObjectURL(blob).
+ */
+export async function fetchDownloadAsBlob(downloadUrl) {
+  try {
+    const headers = await authHeaders();
+    const resp = await fetch(downloadUrl, {
+      method: "GET",
+      headers,
+      cache: "no-store",
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      throw new Error(`Download failed: ${resp.status} ${text}`);
+    }
+    const blob = await resp.blob();
+    return {
+      ok: true,
+      blob,
+      contentType: resp.headers.get("content-type") || "application/pdf",
+    };
+  } catch (e) {
+    return { ok: false, error: e?.message || "Download failed" };
+  }
+}
+
+export { API };
