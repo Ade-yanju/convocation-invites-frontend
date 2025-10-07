@@ -3,9 +3,19 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { verifyCheck, verifyUse } from "../api";
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 
+/**
+ * Upgraded Scanner component:
+ * - faster fps, smaller qrbox
+ * - scanning indicator & overlay
+ * - camera start/stop, camera selection, torch toggle
+ * - supports keyboard-emulating scanners (global listener)
+ * - supports image-file upload scanning
+ * - beep + vibration on success
+ */
+
 const DU = {
-  primary: "#0B2E4E", // Dominion navy
-  accent: "#D4AF37", // Dominion gold
+  primary: "#0B2E4E",
+  accent: "#D4AF37",
   ink: "#0f172a",
   soft: "#f1f5f9",
   line: "#e5e7eb",
@@ -13,7 +23,7 @@ const DU = {
   bad: "#dc2626",
 };
 
-const S = {
+const style = {
   wrap: {
     maxWidth: 980,
     margin: "0 auto",
@@ -21,301 +31,521 @@ const S = {
     fontFamily: "Inter, system-ui, Arial, sans-serif",
     color: DU.ink,
   },
-  row: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 },
+  top: { display: "flex", alignItems: "center", gap: 12, marginBottom: 8 },
+  title: { fontWeight: 900, color: DU.primary, fontSize: 20 },
+  row: { display: "grid", gridTemplateColumns: "1fr 420px", gap: 16 },
   card: {
     border: `1px solid ${DU.line}`,
-    borderRadius: 16,
+    borderRadius: 12,
     background: "#fff",
     boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
   },
   head: {
-    padding: "14px 18px",
+    padding: "12px 14px",
     borderBottom: `1px solid ${DU.line}`,
-    fontWeight: 800,
-    color: DU.primary,
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-  },
-  body: { padding: 16 },
-  input: {
-    width: "100%",
-    height: 40,
-    borderRadius: 12,
-    border: `1px solid ${DU.line}`,
-    padding: "0 12px",
-    fontSize: 14,
-    outline: "none",
-  },
-  btnRow: { display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" },
-  btn: (v = "primary") => ({
-    height: 40,
-    padding: "0 16px",
-    borderRadius: 12,
-    border: "1px solid transparent",
-    background: v === "primary" ? DU.primary : DU.soft,
-    color: v === "primary" ? "#fff" : DU.ink,
+    color: DU.primary,
     fontWeight: 800,
+  },
+  body: { padding: 12 },
+  controlRow: { display: "flex", gap: 8, alignItems: "center" },
+  select: {
+    height: 36,
+    padding: "0 8px",
+    borderRadius: 8,
+    border: `1px solid ${DU.line}`,
+  },
+  btn: (primary = true) => ({
+    height: 36,
+    padding: "0 12px",
+    borderRadius: 8,
+    border: "1px solid transparent",
+    background: primary ? DU.primary : DU.soft,
+    color: primary ? "#fff" : DU.ink,
+    fontWeight: 700,
     cursor: "pointer",
   }),
-  select: {
-    height: 40,
-    padding: "0 12px",
-    borderRadius: 12,
-    border: `1px solid ${DU.line}`,
-    background: "#fff",
+  readerBox: {
+    width: "100%",
+    minHeight: 340,
+    borderRadius: 8,
+    border: `2px dashed ${DU.line}`,
+    position: "relative",
+    overflow: "hidden",
+    background: "#fafafa",
+  },
+  overlay: {
+    position: "absolute",
+    inset: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    pointerEvents: "none",
+  },
+  scanningPulse: {
+    width: 120,
+    height: 120,
+    borderRadius: 8,
+    border: `2px solid rgba(11,46,78,0.12)`,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    color: DU.primary,
+    fontWeight: 800,
   },
   mono: {
-    fontFamily:
-      "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+    fontFamily: "monospace",
     background: "#f8fafc",
-    padding: "8px 10px",
-    borderRadius: 8,
-    border: `1px dashed ${DU.line}`,
+    padding: "6px 8px",
+    borderRadius: 6,
   },
-  ok: { color: DU.ok, fontWeight: 800 },
-  bad: { color: DU.bad, fontWeight: 800 },
-  pill: (c) => ({
-    display: "inline-block",
-    padding: "2px 10px",
-    borderRadius: 999,
-    background: c,
-    color: "#fff",
-    fontSize: 12,
-    fontWeight: 700,
-  }),
-  hint: { fontSize: 12, color: "#64748b" },
+  hint: { fontSize: 13, color: "#64748b" },
+  resultRow: { padding: 12 },
 };
 
 export default function Scanner() {
   const readerId = "qr-reader";
   const qrRef = useRef(null);
-  const [cams, setCams] = useState([]);
+  const html5Ref = useRef(null); // holds Html5Qrcode instance
+  const [cameras, setCameras] = useState([]);
   const [camId, setCamId] = useState("");
   const [torchOn, setTorchOn] = useState(false);
+  const [running, setRunning] = useState(false);
 
   const [token, setToken] = useState("");
-  const [result, setResult] = useState(null); // {ok, status, guest, student, usedAt}
+  const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  // --- camera bootstrap
+  // scanning state for UI
+  const [scanningNow, setScanningNow] = useState(false);
+
+  // buffer for keyboard-emulating scanner input
+  const kbBufferRef = useRef({ buf: "", lastTs: 0 });
+
+  // lastSeen to debounce repeated reads
+  const lastSeenRef = useRef({ t: "", ts: 0 });
+
+  // tone for success
+  const beepRef = useRef(null);
+  useEffect(() => {
+    // tiny beep generator
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      beepRef.current = (freq = 1000, time = 0.08) => {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = "sine";
+        o.frequency.value = freq;
+        g.gain.value = 0.0025;
+        o.connect(g);
+        g.connect(ctx.destination);
+        o.start();
+        g.gain.linearRampToValueAtTime(0.03, ctx.currentTime + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.00001, ctx.currentTime + time);
+        o.stop(ctx.currentTime + time + 0.02);
+      };
+    } catch {
+      beepRef.current = null;
+    }
+  }, []);
+
+  // get cameras on mount
   useEffect(() => {
     (async () => {
       try {
-        const found = await Html5Qrcode.getCameras();
-        setCams(found || []);
-        if (found?.[0]?.id) setCamId(found[0].id);
-      } catch {
-        setErr("Camera unavailable. Use manual token input.");
+        const cams = await Html5Qrcode.getCameras();
+        setCameras(cams || []);
+        if (cams?.[0]?.id) setCamId(cams[0].id);
+      } catch (e) {
+        setErr("No camera access - try manual input or upload.");
       }
     })();
   }, []);
 
-  // --- start/stop when camId changes
+  // start / stop camera controlled by camId / running
   useEffect(() => {
     let disposed = false;
-    async function start() {
+    async function startCamera() {
       if (!camId) return;
-      const html5QrCode = new Html5Qrcode(readerId, { verbose: false });
-      qrRef.current = html5QrCode;
-
+      // create instance if needed
+      if (!html5Ref.current) {
+        html5Ref.current = new Html5Qrcode(readerId, { verbose: false });
+      }
+      const html5QrCode = html5Ref.current;
       try {
+        setErr("");
+        setScanningNow(true);
         await html5QrCode.start(
           { deviceId: { exact: camId } },
           {
-            fps: 8,
-            qrbox: 260,
+            fps: 15, // faster
+            qrbox: { width: 300, height: 300 }, // box size
             formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
           },
           onScanSuccess,
-          () => {}
+          onScanFailure
         );
-        // try to set torch if supported
-        setTimeout(() => toggleTorch(torchOn, true), 200);
+        setRunning(true);
+        setScanningNow(false);
+        // try to set torch if requested
+        setTimeout(() => {
+          if (torchOn) toggleTorch(true, true);
+        }, 250);
       } catch (e) {
-        if (!disposed) setErr("Could not start camera.");
+        setErr("Could not start camera: " + (e?.message || e));
+        setRunning(false);
+        setScanningNow(false);
       }
     }
-    start();
+
+    async function stopCamera() {
+      const instance = html5Ref.current;
+      if (!instance) return;
+      try {
+        await instance.stop();
+        try {
+          instance.clear();
+        } catch {}
+      } catch {}
+      setRunning(false);
+    }
+
+    // start automatically if camId present
+    if (camId) {
+      startCamera();
+    } else {
+      stopCamera();
+    }
 
     return () => {
       disposed = true;
-      try {
-        qrRef.current?.stop();
-      } catch {}
-      try {
-        qrRef.current?.clear();
-      } catch {}
-      qrRef.current = null;
+      // stop on unmount
+      (async () => {
+        try {
+          if (html5Ref.current) {
+            await html5Ref.current.stop();
+            html5Ref.current.clear();
+            html5Ref.current = null;
+          }
+        } catch {}
+      })();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [camId]);
 
-  // --- decode -> setToken (debounced to avoid rapid repeats)
-  const lastSeenRef = useRef({ t: "", ts: 0 });
+  // callback on successful decode from camera
   function onScanSuccess(decodedText) {
-    const now = Date.now();
-    let t = decodedText;
-    try {
-      t = JSON.parse(decodedText)?.t || decodedText;
-    } catch {}
-    t = String(t || "").trim();
+    handleDecoded(decodedText, { fromCamera: true });
+  }
 
-    // ignore tiny repeats for 1.5s
-    if (lastSeenRef.current.t === t && now - lastSeenRef.current.ts < 1500)
+  // onScanFailure is called frequently; we can use it to show scanning pulse
+  function onScanFailure(_err) {
+    // don't flood UI
+    // we set a brief scanning indicator
+    setScanningNow(true);
+    clearTimeout(window.__du_scan_pulse__);
+    window.__du_scan_pulse__ = setTimeout(() => setScanningNow(false), 250);
+  }
+
+  // decode from file upload
+  async function scanFile(file) {
+    if (!file || !html5Ref.current) return;
+    setScanningNow(true);
+    try {
+      const result = await html5Ref.current.scanFileV2(file, true);
+      // scanFileV2 returns an array of results or a single result depending on version
+      const decodedText = Array.isArray(result)
+        ? result[0]?.decodedText || ""
+        : result?.decodedText || "";
+      if (decodedText) handleDecoded(decodedText, { fromFile: true });
+      else setErr("No QR detected in image");
+    } catch (e) {
+      setErr("Failed to scan image: " + (e?.message || e));
+    } finally {
+      setScanningNow(false);
+    }
+  }
+
+  // parse decoded/captured text. Accepts JSON {"t":"..."} or plain tokens.
+  function extractTokenFromDecoded(text) {
+    if (!text) return "";
+    const s = String(text).trim();
+    // try JSON parse
+    try {
+      const parsed = JSON.parse(s);
+      if (parsed && (parsed.t || parsed.token))
+        return String(parsed.t || parsed.token);
+    } catch {}
+    // If QR adds extra whitespace or newlines, clean it
+    // Many hardware scanners produce the raw text token or the JSON string; both covered.
+    // If the scanned string contains a token inside (e.g. "t:abc..."), attempt to extract with regex
+    const m = s.match(/[A-Za-z0-9_-]{8,}/);
+    return m ? m[0] : s;
+  }
+
+  // main decoded handler with debounce to avoid repeats
+  async function handleDecoded(
+    decodedText,
+    { fromCamera = false, fromFile = false } = {}
+  ) {
+    const now = Date.now();
+    let t = extractTokenFromDecoded(decodedText);
+    if (!t) return;
+    // ignore repeats within 1200ms
+    if (lastSeenRef.current.t === t && now - lastSeenRef.current.ts < 1200)
       return;
     lastSeenRef.current = { t, ts: now };
 
-    if (t) {
-      setToken(t);
-      // auto-check on scan
-      check(t, { fromScan: true });
-    }
+    // update token & auto-check
+    setToken(t);
+    await checkToken(t);
   }
 
-  async function toggleTorch(next, silent = false) {
-    try {
-      if (!qrRef.current) return;
-      const capabilities =
-        await qrRef.current.getRunningTrackCameraCapabilities();
-      if (!capabilities || !capabilities.torchFeature?.isSupported) {
-        if (!silent) setErr("Torch not supported on this camera.");
-        return;
-      }
-      await qrRef.current.applyVideoConstraints({
-        advanced: [{ torch: !!next }],
-      });
-      setTorchOn(!!next);
-    } catch {
-      if (!silent) setErr("Failed to toggle torch.");
-    }
-  }
-
-  // --- API calls
-  async function check(_token = token, { fromScan = false } = {}) {
-    if (!_token) return;
+  // check token with backend
+  async function checkToken(t) {
     setBusy(true);
     setErr("");
-    const out = await verifyCheck(_token);
-    setBusy(false);
-    if (out?.ok) {
-      setResult(out);
-      if (fromScan && out.status === "UNUSED") {
-        // optional: haptic/short beep
+    try {
+      // if camera running, keep it running; just show busy
+      const out = await verifyCheck(t);
+      setBusy(false);
+      if (out?.ok) {
+        setResult(out);
+        // feedback (beep/vibrate)
         try {
-          new AudioContext().resume().then(() => {});
+          beepRef.current && beepRef.current(1400, 0.08);
+          navigator.vibrate && navigator.vibrate(80);
         } catch {}
+      } else {
+        setResult(null);
+        setErr(out?.error || "Not recognized");
       }
-    } else {
+    } catch (e) {
+      setBusy(false);
+      setErr(e?.message || "Network error");
       setResult(null);
-      setErr(out?.error || "Invalid token");
     }
   }
 
+  // admit (mark used) — pause camera briefly while admitting
   async function admit() {
     if (!token || busy) return;
     setBusy(true);
     setErr("");
-    // pause camera while admitting to avoid double taps
     try {
-      await qrRef.current?.pause(true);
-    } catch {}
+      // pause camera to avoid duplicates
+      if (html5Ref.current && running) {
+        try {
+          await html5Ref.current.pause(true);
+        } catch {}
+      }
 
-    const out = await verifyUse(token.trim());
+      const out = await verifyUse(token.trim());
+      setBusy(false);
 
-    setBusy(false);
-    // resume camera after a short delay
-    setTimeout(() => {
-      try {
-        qrRef.current?.resume();
-      } catch {}
-    }, 800);
+      // resume camera after 700ms
+      setTimeout(async () => {
+        try {
+          if (html5Ref.current && running) await html5Ref.current.resume();
+        } catch {}
+      }, 700);
 
-    if (out?.ok) {
-      setResult(out);
-    } else {
-      setErr(out?.error || "Admit failed");
+      if (out?.ok) {
+        setResult(out);
+        beepRef.current && beepRef.current(1800, 0.12);
+        navigator.vibrate && navigator.vibrate([60, 30, 30]);
+      } else {
+        setErr(out?.error || "Admit failed");
+      }
+    } catch (e) {
+      setBusy(false);
+      setErr(e?.message || "Network error");
     }
   }
 
-  const mayAdmit = useMemo(
-    () => !!token && !busy && result?.status === "UNUSED",
-    [token, busy, result]
-  );
+  // toggle torch (best-effort)
+  async function toggleTorch(turnOn, silent = false) {
+    try {
+      if (!html5Ref.current) return;
+      const caps = await html5Ref.current.getRunningTrackCameraCapabilities();
+      if (!caps || !caps.torchFeature?.isSupported) {
+        if (!silent) setErr("Torch not supported by this camera.");
+        return;
+      }
+      await html5Ref.current.applyVideoConstraints({
+        advanced: [{ torch: !!turnOn }],
+      });
+      setTorchOn(!!turnOn);
+    } catch (e) {
+      if (!silent) setErr("Failed to toggle torch.");
+    }
+  }
+
+  // Stop camera completely
+  async function stopCamera() {
+    try {
+      if (html5Ref.current) {
+        await html5Ref.current.stop();
+        try {
+          html5Ref.current.clear();
+        } catch {}
+        html5Ref.current = null;
+      }
+    } catch {}
+    setRunning(false);
+  }
+
+  // keyboard listener for hardware scanners that emulate keyboard input.
+  useEffect(() => {
+    function onKey(e) {
+      // Many scanners end with 'Enter' — we collect until Enter
+      const now = Date.now();
+      const kb = kbBufferRef.current;
+      // reset buffer if paused long time
+      if (now - kb.lastTs > 1500) kb.buf = "";
+      kb.lastTs = now;
+
+      if (e.key === "Enter") {
+        const captured = kb.buf.trim();
+        kb.buf = "";
+        if (captured) {
+          handleDecoded(captured, { fromCamera: false });
+        }
+      } else if (e.key.length === 1) {
+        kb.buf += e.key;
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // allow manual paste into input (some scanners paste directly)
+  async function onPasteInput(e) {
+    const pasted = e.clipboardData?.getData("text") || e.target.value;
+    if (pasted) {
+      const t = extractTokenFromDecoded(pasted);
+      setToken(t);
+      await checkToken(t);
+    }
+  }
+
+  // UI helpers
+  const mayAdmit = !!token && !busy && result?.status === "UNUSED";
 
   return (
-    <div style={S.wrap}>
-      <div
-        style={{
-          marginBottom: 8,
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-        }}
-      >
+    <div style={style.wrap}>
+      <div style={style.top}>
         <img
           src="/du-logo.png"
           alt="Dominion University"
           style={{ height: 40 }}
         />
-        <div style={{ fontWeight: 900, color: DU.primary, fontSize: 20 }}>
-          Dominion University • Entrance Scanner
-        </div>
+        <div style={style.title}>Dominion University • Entrance Scanner</div>
       </div>
 
-      <div style={S.row}>
-        <div className="left" style={S.card}>
-          <div style={S.head}>
-            <span>Scanner</span>
-            <div style={{ display: "flex", gap: 8 }}>
+      <div style={style.row}>
+        <div style={style.card}>
+          <div style={style.head}>
+            <div>Scanner</div>
+
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <select
-                style={S.select}
+                aria-label="Camera"
+                style={style.select}
                 value={camId}
                 onChange={(e) => setCamId(e.target.value)}
-                title="Camera"
               >
-                {cams.map((c) => (
+                {cameras.length === 0 && <option value="">No camera</option>}
+                {cameras.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.label || c.id}
                   </option>
                 ))}
               </select>
+
               <button
-                style={S.btn("secondary")}
-                onClick={() => toggleTorch(!torchOn)}
                 type="button"
+                style={style.btn(!running)}
+                onClick={() => {
+                  if (running) {
+                    stopCamera();
+                  } else if (camId) {
+                    // reassign camId to trigger start logic
+                    setCamId((v) => (v ? v : ""));
+                    // start handled by effect
+                  }
+                }}
+              >
+                {running ? "Stop" : "Start"}
+              </button>
+
+              <button
+                type="button"
+                style={style.btn(false)}
+                onClick={() => toggleTorch(!torchOn)}
+                title="Toggle torch (if supported)"
               >
                 {torchOn ? "Torch Off" : "Torch On"}
               </button>
+
+              <label style={{ display: "inline-block" }}>
+                <input
+                  style={{ display: "none" }}
+                  type="file"
+                  accept="image/*"
+                  onChange={(ev) => {
+                    const f = ev.target.files && ev.target.files[0];
+                    if (f) scanFile(f);
+                    ev.target.value = null;
+                  }}
+                />
+                <span style={{ ...style.btn(false), padding: "8px 10px" }}>
+                  Upload Image
+                </span>
+              </label>
             </div>
           </div>
 
-          <div style={S.body}>
-            <div
-              id={readerId}
-              style={{
-                width: "100%",
-                minHeight: 300,
-                borderRadius: 12,
-                border: `1px dashed ${DU.line}`,
-              }}
-            />
-
-            <div style={{ marginTop: 12 }}>
-              <div style={{ ...S.hint, marginBottom: 6 }}>
-                Manual token (fallback)
+          <div style={style.body}>
+            <div id={readerId} style={style.readerBox}>
+              {/* overlay scanning pulse */}
+              <div style={style.overlay}>
+                <div style={style.scanningPulse}>
+                  {scanningNow
+                    ? "Scanning…"
+                    : running
+                    ? "Ready"
+                    : "Camera stopped"}
+                </div>
               </div>
-              <input
-                style={S.input}
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
-                placeholder="Paste token here…"
-              />
-              <div style={S.btnRow}>
+
+              {/* html5-qrcode injects video element into the readerId container */}
+            </div>
+
+            {/* manual token input */}
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 13, marginBottom: 6 }}>
+                Manual token (or paste scanned result)
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  placeholder="Paste token or scanned JSON here"
+                  style={{
+                    flex: 1,
+                    height: 40,
+                    borderRadius: 8,
+                    border: `1px solid ${DU.line}`,
+                    padding: "0 10px",
+                  }}
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  onPaste={onPasteInput}
+                />
                 <button
-                  style={S.btn("secondary")}
-                  type="button"
+                  style={style.btn(false)}
                   onClick={() => {
                     setToken("");
                     setResult(null);
@@ -325,77 +555,83 @@ export default function Scanner() {
                   Clear
                 </button>
                 <button
-                  style={S.btn("primary")}
+                  style={style.btn(true)}
+                  onClick={() => token && checkToken(token)}
                   disabled={!token || busy}
-                  type="button"
-                  onClick={() => check()}
                 >
-                  {busy ? "Checking…" : "Check status"}
+                  {busy ? "Checking…" : "Check"}
                 </button>
                 <button
-                  style={S.btn("primary")}
-                  disabled={!mayAdmit}
-                  type="button"
+                  style={{ ...style.btn(true), opacity: mayAdmit ? 1 : 0.6 }}
                   onClick={admit}
+                  disabled={!mayAdmit}
                 >
-                  {busy ? "Marking…" : "Admit (mark used)"}
+                  {busy ? "Marking…" : "Admit"}
                 </button>
               </div>
-              {err && (
-                <div style={{ marginTop: 8, color: DU.bad, fontSize: 13 }}>
-                  {err}
-                </div>
-              )}
+              <div style={{ marginTop: 8 }}>
+                <span style={style.hint}>
+                  Tip: If you use a hardware scanner (gun), it will usually type
+                  the scanned string into this page — press Enter or the Check
+                  button will auto-run.
+                </span>
+              </div>
+
+              {err && <div style={{ color: DU.bad, marginTop: 8 }}>{err}</div>}
             </div>
           </div>
         </div>
 
-        <div className="right" style={S.card}>
-          <div style={S.head}>Result</div>
-          <div style={S.body}>
+        <div style={style.card}>
+          <div style={style.head}>Result</div>
+          <div style={style.body}>
             {!result ? (
-              <div style={S.hint}>
-                Scan a QR or paste a token to view status.
+              <div style={style.hint}>
+                Scan a QR (via camera) or paste a token to view status.
               </div>
             ) : (
-              <div>
+              <div style={style.resultRow}>
                 <div style={{ marginBottom: 8 }}>
-                  Status:&nbsp;
+                  <strong>Status: </strong>
                   {result.status === "USED" ? (
-                    <span style={S.pill(DU.bad)}>USED</span>
+                    <span style={{ color: DU.bad, fontWeight: 800 }}>USED</span>
                   ) : result.status === "UNUSED" ? (
-                    <span style={S.pill(DU.ok)}>UNUSED</span>
+                    <span style={{ color: DU.ok, fontWeight: 800 }}>
+                      UNUSED
+                    </span>
                   ) : (
-                    <span style={S.pill("#64748b")}>{result.status}</span>
+                    <span style={{ fontWeight: 800 }}>{result.status}</span>
                   )}
                 </div>
 
                 {result.guest && (
-                  <div style={{ marginBottom: 10 }}>
+                  <div style={{ marginBottom: 8 }}>
                     <div>
-                      <b>Guest:</b> {result.guest.guestName}
+                      <strong>Guest:</strong> {result.guest.guestName}
                     </div>
                     <div>
-                      <b>Student:</b> {result.student?.studentName}
+                      <strong>Student:</strong> {result.student?.studentName}
                     </div>
                     <div>
-                      <b>Matric:</b> {result.student?.matricNo}
+                      <strong>Matric:</strong> {result.student?.matricNo}
                     </div>
                   </div>
                 )}
 
                 <div>
-                  <b>Token:</b> <span style={S.mono}>{token}</span>
+                  <strong>Token:</strong>{" "}
+                  <span style={style.mono}>{token}</span>
                 </div>
 
                 {result.usedAt && (
-                  <div style={{ marginTop: 6 }}>
-                    <b>Used at:</b> {new Date(result.usedAt).toLocaleString()}
+                  <div style={{ marginTop: 8 }}>
+                    <strong>Used at:</strong>{" "}
+                    {new Date(result.usedAt).toLocaleString()}
                   </div>
                 )}
                 {result.usedBy && (
-                  <div style={{ marginTop: 2 }}>
-                    <b>Checked by:</b> {result.usedBy}
+                  <div style={{ marginTop: 4 }}>
+                    <strong>Checked by:</strong> {result.usedBy}
                   </div>
                 )}
               </div>
