@@ -60,9 +60,11 @@ export async function createStudent(payload) {
     };
     const r = await fetch(`${API}/admin/students`, {
       method: "POST",
-      headers,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${t}`,
+      },
       body: JSON.stringify(payload),
-      // NOTE: do NOT use credentials: "include" here unless server CORS uses credentials:true AND cookies are required.
     });
     return await r.json();
   } catch (e) {
