@@ -1,237 +1,214 @@
-// client/src/components/Scanner.jsx
-import React, { useEffect, useRef, useState } from "react";
-import { Html5Qrcode } from "html5-qrcode";
-import toast from "react-hot-toast";
-import { verifyCheckPublic, verifyUseWithPin } from "../api";
+import React, { useState } from "react";
+import { QrReader } from "react-qr-reader";
+import { verifyCheckPublic, verifyUse } from "../api";
+import { useNavigate } from "react-router-dom";
 
-const Scanner = () => {
-  const readerId = "qr-reader";
-  const html5Ref = useRef(null);
-  const [cameras, setCameras] = useState([]);
-  const [camId, setCamId] = useState("");
-  const [result, setResult] = useState(null);
-  const [token, setToken] = useState("");
-  const [pin, setPin] = useState("");
+export default function Scanner() {
+  const [guest, setGuest] = useState(null);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [scanned, setScanned] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const navigate = useNavigate();
 
-  // Load cameras
-  useEffect(() => {
-    Html5Qrcode.getCameras()
-      .then((devices) => {
-        setCameras(devices);
-        if (devices.length > 0) {
-          const backCam = devices.find((c) => /back|rear/i.test(c.label));
-          setCamId(backCam ? backCam.id : devices[0].id);
-        }
-      })
-      .catch(() => setError("Camera access denied"));
-  }, []);
-
-  // Start camera
-  useEffect(() => {
-    if (!camId) return;
-
-    const html5 = new Html5Qrcode(readerId);
-    html5Ref.current = html5;
-
-    html5
-      .start(
-        { deviceId: { exact: camId } },
-        { fps: 10, qrbox: { width: 250, height: 250 } },
-        onScanSuccess
-      )
-      .catch((e) => setError("Failed to start camera: " + e.message));
-
-    return () => {
-      html5.stop().catch(() => {});
-      html5.clear();
-    };
-  }, [camId]);
-
-  const onScanSuccess = async (decodedText) => {
-    const tok = extractToken(decodedText);
-    if (!tok) return;
-    setToken(tok);
-    await handleVerify(tok);
-  };
-
-  const extractToken = (str) => {
-    try {
-      const obj = JSON.parse(str);
-      return obj.token || obj.t || str;
-    } catch {
-      return str.trim();
-    }
-  };
-
-  const handleVerify = async (tok) => {
-    setBusy(true);
+  const handleScan = async (token) => {
+    if (!token || scanned) return;
+    setScanned(true);
+    setLoading(true);
+    setGuest(null);
     setError("");
+    setSuccess(false);
+
     try {
-      const res = await verifyCheckPublic(tok);
-      if (!res.ok) throw new Error(res.error || "Invalid token");
-      setResult(res);
-      toast.success("QR verified successfully!");
-    } catch (e) {
-      setError(e.message);
-      toast.error("Invalid or used QR code!");
-      setResult(null);
+      const res = await verifyCheckPublic(token);
+      if (res.ok) {
+        setGuest({ ...res.guest, token });
+      } else {
+        setError(res.error || "Invalid or expired QR code");
+      }
+    } catch (err) {
+      setError("Error verifying QR code");
     } finally {
-      setBusy(false);
+      setLoading(false);
     }
   };
 
   const handleAdmit = async () => {
-    if (!token || !pin) {
-      setError("PIN required");
-      toast.error("Please enter PIN");
-      return;
-    }
-    setBusy(true);
+    if (!guest?.token) return;
+    setLoading(true);
     setError("");
+
     try {
-      const res = await verifyUseWithPin(token, pin);
-      if (!res.ok) throw new Error(res.error || "Admission failed");
-      setResult(res);
-      toast.success("Guest admitted successfully ✅");
-    } catch (e) {
-      setError(e.message);
-      toast.error(e.message || "Admission failed ❌");
+      const res = await verifyUse(guest.token);
+      if (res.ok) {
+        setGuest({ ...guest, status: "USED" });
+        setSuccess(true);
+        // brief visual pulse effect, then reset success
+        setTimeout(() => setSuccess(false), 1500);
+      } else {
+        setError(res.error || "Error admitting guest");
+      }
+    } catch (err) {
+      setError("Failed to mark guest as admitted");
     } finally {
-      setBusy(false);
+      setLoading(false);
     }
+  };
+
+  const resetScanner = () => {
+    setGuest(null);
+    setError("");
+    setScanned(false);
+    setSuccess(false);
   };
 
   return (
     <div
       style={{
-        maxWidth: 900,
-        margin: "auto",
-        padding: 16,
-        fontFamily: "Inter, sans-serif",
+        maxWidth: 500,
+        margin: "40px auto",
+        textAlign: "center",
+        background: "#fff",
+        borderRadius: 16,
+        padding: 20,
+        boxShadow: "0 1px 4px rgba(0,0,0,0.1)",
       }}
     >
-      <h2 style={{ textAlign: "center", color: "#0B2E4E" }}>
-        Dominion University • Gate Scanner
-      </h2>
+      <h2 style={{ color: "#0B2E4E", marginBottom: 10 }}>Gate Scanner</h2>
 
-      <div
-        style={{
-          display: "flex",
-          flexDirection: window.innerWidth < 768 ? "column" : "row",
-          gap: 16,
-          marginTop: 20,
-        }}
-      >
-        <div style={{ flex: 1 }}>
+      {!guest && !error && (
+        <>
+          <div style={{ width: "100%", borderRadius: 12, overflow: "hidden" }}>
+            <QrReader
+              onResult={(result) => {
+                if (result?.text) handleScan(result.text);
+              }}
+              constraints={{ facingMode: "environment" }}
+              style={{ width: "100%" }}
+            />
+          </div>
+          <p style={{ color: "#64748b", marginTop: 10 }}>
+            Point your camera at a guest’s QR code
+          </p>
+        </>
+      )}
+
+      {loading && <p style={{ color: "#64748b" }}>Processing...</p>}
+
+      {error && (
+        <div style={{ color: "#dc2626", fontWeight: 600, marginTop: 10 }}>
+          {error}
+          <div>
+            <button
+              style={{
+                marginTop: 12,
+                background: "#f1f5f9",
+                border: "none",
+                padding: "8px 14px",
+                borderRadius: 8,
+                cursor: "pointer",
+              }}
+              onClick={resetScanner}
+            >
+              Scan Again
+            </button>
+          </div>
+        </div>
+      )}
+
+      {guest && (
+        <div style={{ marginTop: 20 }}>
+          <h3 style={{ color: "#0f172a" }}>Guest Details</h3>
           <div
-            id={readerId}
             style={{
-              width: "100%",
-              minHeight: 300,
-              border: "2px dashed #e5e7eb",
-              borderRadius: 10,
-              overflow: "hidden",
+              background: "#f8fafc",
+              borderRadius: 12,
+              padding: "12px 16px",
+              textAlign: "left",
+              marginTop: 8,
             }}
-          ></div>
-          <select
-            style={{
-              width: "100%",
-              marginTop: 10,
-              padding: 8,
-              borderRadius: 8,
-            }}
-            value={camId}
-            onChange={(e) => setCamId(e.target.value)}
           >
-            {cameras.map((cam) => (
-              <option key={cam.id} value={cam.id}>
-                {cam.label || cam.id}
-              </option>
-            ))}
-          </select>
-          {error && (
-            <div style={{ color: "red", marginTop: 10, textAlign: "center" }}>
-              {error}
-            </div>
-          )}
-        </div>
+            <p>
+              <strong>Name:</strong> {guest.guestName}
+            </p>
+            <p>
+              <strong>Email:</strong> {guest.email}
+            </p>
+            <p>
+              <strong>Status:</strong>{" "}
+              <span
+                style={{
+                  color: guest.status === "USED" ? "#dc2626" : "#16a34a",
+                  fontWeight: 600,
+                }}
+              >
+                {guest.status}
+              </span>
+            </p>
+          </div>
 
-        <div
-          style={{
-            flex: 1,
-            border: "1px solid #ddd",
-            borderRadius: 10,
-            padding: 16,
-            background: "#fff",
-          }}
-        >
-          <h3 style={{ color: "#0B2E4E" }}>Scan Result</h3>
-          {busy && <p>Loading...</p>}
-          {!result && !busy && <p>No scan yet</p>}
-
-          {result && (
-            <>
-              <p>
-                <strong>Status:</strong>{" "}
-                {result.status === "USED" ? (
-                  <span style={{ color: "red" }}>USED</span>
-                ) : (
-                  <span style={{ color: "green" }}>UNUSED</span>
-                )}
-              </p>
-              {result.guest && (
-                <>
-                  <p>
-                    <strong>Guest:</strong> {result.guest.guestName}
-                  </p>
-                  <p>
-                    <strong>Student:</strong> {result.student?.studentName}
-                  </p>
-                  <p>
-                    <strong>Matric:</strong> {result.student?.matricNo}
-                  </p>
-                </>
-              )}
-              {result.status === "UNUSED" && (
-                <>
-                  <input
-                    type="password"
-                    value={pin}
-                    onChange={(e) => setPin(e.target.value)}
-                    placeholder="Enter PIN"
-                    style={{
-                      width: "100%",
-                      padding: 8,
-                      borderRadius: 8,
-                      border: "1px solid #ccc",
-                      marginTop: 8,
-                    }}
-                  />
-                  <button
-                    onClick={handleAdmit}
-                    disabled={busy}
-                    style={{
-                      background: "#0B2E4E",
-                      color: "#fff",
-                      padding: "8px 16px",
-                      borderRadius: 8,
-                      border: "none",
-                      marginTop: 12,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Admit Guest
-                  </button>
-                </>
-              )}
-            </>
+          {guest.status !== "USED" ? (
+            <button
+              style={{
+                marginTop: 16,
+                background: success ? "#16a34a" : "#0B2E4E",
+                color: "#fff",
+                padding: "10px 16px",
+                borderRadius: 8,
+                border: "none",
+                cursor: "pointer",
+                fontWeight: 600,
+                transform: success ? "scale(1.1)" : "scale(1)",
+                boxShadow: success
+                  ? "0 0 10px 2px rgba(22,163,74,0.5)"
+                  : "none",
+                transition: "all 0.3s ease",
+              }}
+              onClick={handleAdmit}
+              disabled={loading || success}
+            >
+              {success ? "✅ Admitted!" : "Admit Guest"}
+            </button>
+          ) : (
+            <p style={{ color: "#dc2626", fontWeight: 600, marginTop: 12 }}>
+              Already Admitted
+            </p>
           )}
+
+          <div>
+            <button
+              style={{
+                marginTop: 16,
+                background: "#f1f5f9",
+                padding: "8px 14px",
+                borderRadius: 8,
+                border: "none",
+                cursor: "pointer",
+              }}
+              onClick={resetScanner}
+            >
+              Scan Another
+            </button>
+          </div>
+
+          <div>
+            <button
+              style={{
+                marginTop: 10,
+                background: "#0f172a",
+                color: "#fff",
+                padding: "8px 14px",
+                borderRadius: 8,
+                border: "none",
+                cursor: "pointer",
+              }}
+              onClick={() => navigate("/admin")}
+            >
+              Back to Dashboard
+            </button>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
-};
-
-export default Scanner;
+}
