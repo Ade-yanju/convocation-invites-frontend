@@ -1,137 +1,127 @@
+// client/src/pages/PublicVerifyPage.js
 import React, { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { verifyCheckPublic, verifyUseWithPin } from "../api";
-import toast from "react-hot-toast";
 
 export default function PublicVerifyPage() {
   const { token } = useParams();
+  const [guest, setGuest] = useState(null);
   const [status, setStatus] = useState("loading");
-  const [info, setInfo] = useState(null);
+  const [error, setError] = useState("");
   const [pin, setPin] = useState("");
+  const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
-    const checkToken = async () => {
-      try {
-        const res = await verifyCheckPublic(token);
-        if (!res.ok) {
-          setStatus("error");
-          toast.error(res.error || "Invalid or expired QR code");
-        } else {
-          setInfo(res.data || res);
-          setStatus("ok");
-        }
-      } catch (e) {
-        setStatus("error");
-        toast.error("Network error while verifying token");
+    async function check() {
+      const r = await verifyCheckPublic(token);
+      if (r.ok && r.guest) {
+        setGuest(r.guest);
+        setStatus(r.guest.status);
+      } else {
+        setError(r.error || "Invalid or expired QR");
       }
-    };
-    checkToken();
+    }
+    check();
   }, [token]);
 
-  const handleMarkUsed = async () => {
-    if (!pin.trim()) return toast.error("Please enter a PIN");
-
-    const res = await verifyUseWithPin(token, pin);
-    if (res.ok) {
-      toast.success("Marked as used successfully ✅");
-      setInfo({ ...info, used: true, usedAt: new Date().toISOString() });
+  async function markUsed() {
+    setConfirming(true);
+    const r = await verifyUseWithPin(token, pin || "");
+    setConfirming(false);
+    if (r.ok) {
+      setStatus("USED");
+      alert("✅ Guest admitted successfully");
+      window.location.href = "/admin"; // redirect to dashboard
     } else {
-      toast.error(res.error || "Failed to mark as used");
+      alert(r.error || "Failed to admit guest");
     }
-  };
-
-  if (status === "loading") {
-    return (
-      <div style={{ padding: 40, textAlign: "center" }}>
-        <h2>Verifying invite…</h2>
-      </div>
-    );
   }
 
-  if (status === "error" || !info) {
-    return (
-      <div style={{ padding: 40, textAlign: "center", color: "red" }}>
-        <h2>❌ Invalid or expired invite</h2>
-        <p>Please contact event support for assistance.</p>
-      </div>
-    );
-  }
+  if (error) return <div style={styles.page}>❌ {error}</div>;
+  if (!guest) return <div style={styles.page}>Checking QR...</div>;
 
   return (
-    <div
-      style={{
-        maxWidth: 480,
-        margin: "40px auto",
-        background: "#fff",
-        borderRadius: 12,
-        boxShadow: "0 4px 10px rgba(0,0,0,0.1)",
-        padding: 24,
-      }}
-    >
-      <h1 style={{ textAlign: "center", marginBottom: 20 }}>
-        🎓 Convocation Invite
-      </h1>
+    <div style={styles.page}>
+      <div style={styles.card}>
+        <h2 style={styles.title}>Guest Verification</h2>
+        <p>
+          <b>Guest:</b> {guest.guestName}
+        </p>
+        <p>
+          <b>Student:</b> {guest.student?.studentName}
+        </p>
+        <p>
+          <b>Matric No:</b> {guest.student?.matricNo}
+        </p>
+        <p>
+          <b>Status:</b>{" "}
+          <span style={{ color: status === "USED" ? "red" : "green" }}>
+            {status}
+          </span>
+        </p>
 
-      <div style={{ marginBottom: 16 }}>
-        <strong>Name:</strong> {info.name || "N/A"}
-      </div>
-      <div style={{ marginBottom: 16 }}>
-        <strong>Department:</strong> {info.department || "N/A"}
-      </div>
-      <div style={{ marginBottom: 16 }}>
-        <strong>Seat Number:</strong> {info.seat || "Not Assigned"}
-      </div>
-      <div style={{ marginBottom: 16 }}>
-        <strong>Status:</strong>{" "}
-        {info.used ? (
-          <span style={{ color: "red", fontWeight: "bold" }}>USED</span>
+        {status === "UNUSED" ? (
+          <>
+            <input
+              type="password"
+              placeholder="Enter gate PIN (optional)"
+              value={pin}
+              onChange={(e) => setPin(e.target.value)}
+              style={styles.input}
+            />
+            <button
+              onClick={markUsed}
+              disabled={confirming}
+              style={styles.button}
+            >
+              {confirming ? "Marking..." : "Admit & Mark Used"}
+            </button>
+          </>
         ) : (
-          <span style={{ color: "green", fontWeight: "bold" }}>VALID</span>
+          <div style={{ marginTop: 12, color: "#666" }}>
+            Already used — access logged.
+          </div>
         )}
       </div>
-
-      {!info.used && (
-        <div style={{ marginTop: 30 }}>
-          <label
-            style={{ display: "block", marginBottom: 8, fontWeight: "bold" }}
-          >
-            Enter Security PIN
-          </label>
-          <input
-            type="password"
-            value={pin}
-            onChange={(e) => setPin(e.target.value)}
-            placeholder="Enter PIN"
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              borderRadius: 8,
-              border: "1px solid #ddd",
-              marginBottom: 12,
-            }}
-          />
-          <button
-            onClick={handleMarkUsed}
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              background: "#0f172a",
-              color: "#fff",
-              border: "none",
-              borderRadius: 8,
-              cursor: "pointer",
-            }}
-          >
-            ✅ Mark as Used
-          </button>
-        </div>
-      )}
-
-      {info.used && info.usedAt && (
-        <p style={{ marginTop: 20, color: "#666", fontSize: 14 }}>
-          Used at: {new Date(info.usedAt).toLocaleString()}
-        </p>
-      )}
     </div>
   );
 }
+
+const styles = {
+  page: {
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
+    minHeight: "100vh",
+    background: "#f8fafc",
+  },
+  card: {
+    background: "#fff",
+    padding: 24,
+    borderRadius: 12,
+    boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+    width: 300,
+  },
+  title: {
+    marginBottom: 12,
+    color: "#0B2E4E",
+  },
+  input: {
+    width: "100%",
+    padding: 8,
+    marginTop: 8,
+    borderRadius: 8,
+    border: "1px solid #ddd",
+  },
+  button: {
+    marginTop: 12,
+    width: "100%",
+    background: "#0B2E4E",
+    color: "#fff",
+    border: "none",
+    borderRadius: 8,
+    padding: "10px 0",
+    fontWeight: 600,
+    cursor: "pointer",
+  },
+};
