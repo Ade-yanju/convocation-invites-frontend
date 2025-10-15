@@ -1,4 +1,3 @@
-// client/src/pages/PublicVerifyPage.js
 import React, { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { verifyCheckPublic, verifyUseWithPin } from "../api";
@@ -10,15 +9,20 @@ export default function PublicVerifyPage() {
   const [error, setError] = useState("");
   const [pin, setPin] = useState("");
   const [confirming, setConfirming] = useState(false);
+  const [verified, setVerified] = useState(false);
 
   useEffect(() => {
     async function check() {
-      const r = await verifyCheckPublic(token);
-      if (r.ok && r.guest) {
-        setGuest(r.guest);
-        setStatus(r.guest.status);
-      } else {
-        setError(r.error || "Invalid or expired QR");
+      try {
+        const r = await verifyCheckPublic(token);
+        if (r.ok && r.guest) {
+          setGuest(r.guest);
+          setStatus(r.guest.status);
+        } else {
+          setError(r.error || "Invalid or expired QR");
+        }
+      } catch (err) {
+        setError("Unable to verify QR at the moment");
       }
     }
     check();
@@ -26,24 +30,51 @@ export default function PublicVerifyPage() {
 
   async function markUsed() {
     setConfirming(true);
-    const r = await verifyUseWithPin(token, pin || "");
-    setConfirming(false);
-    if (r.ok) {
-      setStatus("USED");
-      alert("✅ Guest admitted successfully");
-      window.location.href = "/admin"; // redirect to dashboard
-    } else {
-      alert(r.error || "Failed to admit guest");
+    try {
+      const r = await verifyUseWithPin(token, pin || "");
+      if (r.ok) {
+        setStatus("USED");
+        setVerified(true);
+        // brief confirmation screen before redirect
+        setTimeout(() => {
+          window.location.href = "/admin";
+        }, 1800);
+      } else {
+        alert(r.error || "Failed to admit guest");
+      }
+    } catch (err) {
+      alert("Network error while verifying guest");
+    } finally {
+      setConfirming(false);
     }
   }
 
-  if (error) return <div style={styles.page}>❌ {error}</div>;
-  if (!guest) return <div style={styles.page}>Checking QR...</div>;
+  if (error) {
+    return (
+      <div style={styles.page}>
+        <div style={styles.card}>
+          <h2 style={styles.title}>❌ Invalid QR</h2>
+          <p style={{ color: "#dc2626" }}>{error}</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!guest) {
+    return (
+      <div style={styles.page}>
+        <div style={styles.card}>
+          <h3 style={{ color: "#64748b" }}>Checking QR...</h3>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={styles.page}>
       <div style={styles.card}>
         <h2 style={styles.title}>Guest Verification</h2>
+
         <p>
           <b>Guest:</b> {guest.guestName}
         </p>
@@ -55,12 +86,23 @@ export default function PublicVerifyPage() {
         </p>
         <p>
           <b>Status:</b>{" "}
-          <span style={{ color: status === "USED" ? "red" : "green" }}>
+          <span
+            style={{
+              color: status === "USED" ? "#dc2626" : "#16a34a",
+              fontWeight: 700,
+            }}
+          >
             {status}
           </span>
         </p>
 
-        {status === "UNUSED" ? (
+        {verified && (
+          <div style={{ marginTop: 14, color: "#16a34a", fontWeight: 700 }}>
+            ✅ Guest Verified Successfully!
+          </div>
+        )}
+
+        {status === "UNUSED" && !verified && (
           <>
             <input
               type="password"
@@ -72,14 +114,19 @@ export default function PublicVerifyPage() {
             <button
               onClick={markUsed}
               disabled={confirming}
-              style={styles.button}
+              style={{
+                ...styles.button,
+                background: confirming ? "#64748b" : "#0B2E4E",
+              }}
             >
-              {confirming ? "Marking..." : "Admit & Mark Used"}
+              {confirming ? "Verifying..." : "✅ Verify Guest"}
             </button>
           </>
-        ) : (
-          <div style={{ marginTop: 12, color: "#666" }}>
-            Already used — access logged.
+        )}
+
+        {status === "USED" && !verified && (
+          <div style={{ marginTop: 12, color: "#dc2626", fontWeight: 600 }}>
+            Already Admitted — Access Logged
           </div>
         )}
       </div>
@@ -94,13 +141,16 @@ const styles = {
     alignItems: "center",
     minHeight: "100vh",
     background: "#f8fafc",
+    padding: 16,
   },
   card: {
     background: "#fff",
     padding: 24,
     borderRadius: 12,
     boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
-    width: 300,
+    width: "100%",
+    maxWidth: 350,
+    textAlign: "center",
   },
   title: {
     marginBottom: 12,
@@ -109,14 +159,14 @@ const styles = {
   input: {
     width: "100%",
     padding: 8,
-    marginTop: 8,
+    marginTop: 12,
     borderRadius: 8,
     border: "1px solid #ddd",
+    outline: "none",
   },
   button: {
     marginTop: 12,
     width: "100%",
-    background: "#0B2E4E",
     color: "#fff",
     border: "none",
     borderRadius: 8,

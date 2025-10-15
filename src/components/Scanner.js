@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { QrReader } from "react-qr-reader";
+import { QrScanner } from "@yudiel/react-qr-scanner";
 import { verifyCheckPublic, verifyUse } from "../api";
 import { useNavigate } from "react-router-dom";
 
@@ -43,7 +43,7 @@ export default function Scanner() {
       if (res.ok) {
         setGuest({ ...guest, status: "USED" });
         setSuccess(true);
-        // brief visual pulse effect, then reset success
+        // pulse success effect then reset
         setTimeout(() => setSuccess(false), 1500);
       } else {
         setError(res.error || "Error admitting guest");
@@ -79,10 +79,11 @@ export default function Scanner() {
       {!guest && !error && (
         <>
           <div style={{ width: "100%", borderRadius: 12, overflow: "hidden" }}>
-            <QrReader
-              onResult={(result) => {
-                if (result?.text) handleScan(result.text);
+            <QrScanner
+              onDecode={(result) => {
+                if (result) handleScan(result);
               }}
+              onError={(err) => console.error(err)}
               constraints={{ facingMode: "environment" }}
               style={{ width: "100%" }}
             />
@@ -132,7 +133,7 @@ export default function Scanner() {
               <strong>Name:</strong> {guest.guestName}
             </p>
             <p>
-              <strong>Email:</strong> {guest.email}
+              <strong>Student:</strong> {guest.studentName || "-"}
             </p>
             <p>
               <strong>Status:</strong>{" "}
