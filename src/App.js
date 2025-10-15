@@ -6,11 +6,15 @@ import Scanner from "./components/Scanner";
 import PublicVerifyPage from "./pages/PublicVerifyPage";
 import { logout } from "./api";
 import { useAuth } from "./authContext";
+import { Toaster } from "react-hot-toast";
 
 const Nav = () => {
   const { user } = useAuth();
   const loc = useLocation();
-  if (loc.pathname === "/login") return null;
+
+  // Hide navbar on login & public verify page (optional)
+  if (loc.pathname === "/login" || loc.pathname.startsWith("/verify"))
+    return null;
 
   const bar = {
     display: "flex",
@@ -63,10 +67,17 @@ const Protected = ({ children }) => {
 export default function App() {
   return (
     <>
+      {/* 🔔 Global toast notifications */}
+      <Toaster position="top-center" reverseOrder={false} />
+
       <Nav />
+
       <Routes>
+        {/* 🧭 Public routes */}
         <Route path="/login" element={<Login />} />
         <Route path="/verify/:token" element={<PublicVerifyPage />} />
+
+        {/* 🔐 Protected routes */}
         <Route
           path="/admin"
           element={
@@ -83,6 +94,8 @@ export default function App() {
             </Protected>
           }
         />
+
+        {/* Default redirect */}
         <Route path="*" element={<Navigate to="/admin" replace />} />
       </Routes>
     </>

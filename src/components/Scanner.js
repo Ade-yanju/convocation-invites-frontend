@@ -1,644 +1,237 @@
 // client/src/components/Scanner.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { verifyCheck, verifyUse } from "../api";
-import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
+import React, { useEffect, useRef, useState } from "react";
+import { Html5Qrcode } from "html5-qrcode";
+import toast from "react-hot-toast";
+import { verifyCheckPublic, verifyUseWithPin } from "../api";
 
-/**
- * Upgraded Scanner component:
- * - faster fps, smaller qrbox
- * - scanning indicator & overlay
- * - camera start/stop, camera selection, torch toggle
- * - supports keyboard-emulating scanners (global listener)
- * - supports image-file upload scanning
- * - beep + vibration on success
- */
-
-const DU = {
-  primary: "#0B2E4E",
-  accent: "#D4AF37",
-  ink: "#0f172a",
-  soft: "#f1f5f9",
-  line: "#e5e7eb",
-  ok: "#16a34a",
-  bad: "#dc2626",
-};
-
-const style = {
-  wrap: {
-    maxWidth: 980,
-    margin: "0 auto",
-    padding: 16,
-    fontFamily: "Inter, system-ui, Arial, sans-serif",
-    color: DU.ink,
-  },
-  top: { display: "flex", alignItems: "center", gap: 12, marginBottom: 8 },
-  title: { fontWeight: 900, color: DU.primary, fontSize: 20 },
-  row: { display: "grid", gridTemplateColumns: "1fr 420px", gap: 16 },
-  card: {
-    border: `1px solid ${DU.line}`,
-    borderRadius: 12,
-    background: "#fff",
-    boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
-  },
-  head: {
-    padding: "12px 14px",
-    borderBottom: `1px solid ${DU.line}`,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    color: DU.primary,
-    fontWeight: 800,
-  },
-  body: { padding: 12 },
-  controlRow: { display: "flex", gap: 8, alignItems: "center" },
-  select: {
-    height: 36,
-    padding: "0 8px",
-    borderRadius: 8,
-    border: `1px solid ${DU.line}`,
-  },
-  btn: (primary = true) => ({
-    height: 36,
-    padding: "0 12px",
-    borderRadius: 8,
-    border: "1px solid transparent",
-    background: primary ? DU.primary : DU.soft,
-    color: primary ? "#fff" : DU.ink,
-    fontWeight: 700,
-    cursor: "pointer",
-  }),
-  readerBox: {
-    width: "100%",
-    minHeight: 340,
-    borderRadius: 8,
-    border: `2px dashed ${DU.line}`,
-    position: "relative",
-    overflow: "hidden",
-    background: "#fafafa",
-  },
-  overlay: {
-    position: "absolute",
-    inset: 0,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    pointerEvents: "none",
-  },
-  scanningPulse: {
-    width: 120,
-    height: 120,
-    borderRadius: 8,
-    border: `2px solid rgba(11,46,78,0.12)`,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    color: DU.primary,
-    fontWeight: 800,
-  },
-  mono: {
-    fontFamily: "monospace",
-    background: "#f8fafc",
-    padding: "6px 8px",
-    borderRadius: 6,
-  },
-  hint: { fontSize: 13, color: "#64748b" },
-  resultRow: { padding: 12 },
-};
-
-export default function Scanner() {
+const Scanner = () => {
   const readerId = "qr-reader";
-  const qrRef = useRef(null);
-  const html5Ref = useRef(null); // holds Html5Qrcode instance
+  const html5Ref = useRef(null);
   const [cameras, setCameras] = useState([]);
   const [camId, setCamId] = useState("");
-  const [torchOn, setTorchOn] = useState(false);
-  const [running, setRunning] = useState(false);
-
-  const [token, setToken] = useState("");
   const [result, setResult] = useState(null);
+  const [token, setToken] = useState("");
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
 
-  // scanning state for UI
-  const [scanningNow, setScanningNow] = useState(false);
-
-  // buffer for keyboard-emulating scanner input
-  const kbBufferRef = useRef({ buf: "", lastTs: 0 });
-
-  // lastSeen to debounce repeated reads
-  const lastSeenRef = useRef({ t: "", ts: 0 });
-
-  // tone for success
-  const beepRef = useRef(null);
+  // Load cameras
   useEffect(() => {
-    // tiny beep generator
-    try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      beepRef.current = (freq = 1000, time = 0.08) => {
-        const o = ctx.createOscillator();
-        const g = ctx.createGain();
-        o.type = "sine";
-        o.frequency.value = freq;
-        g.gain.value = 0.0025;
-        o.connect(g);
-        g.connect(ctx.destination);
-        o.start();
-        g.gain.linearRampToValueAtTime(0.03, ctx.currentTime + 0.01);
-        g.gain.exponentialRampToValueAtTime(0.00001, ctx.currentTime + time);
-        o.stop(ctx.currentTime + time + 0.02);
-      };
-    } catch {
-      beepRef.current = null;
-    }
+    Html5Qrcode.getCameras()
+      .then((devices) => {
+        setCameras(devices);
+        if (devices.length > 0) {
+          const backCam = devices.find((c) => /back|rear/i.test(c.label));
+          setCamId(backCam ? backCam.id : devices[0].id);
+        }
+      })
+      .catch(() => setError("Camera access denied"));
   }, []);
 
-  // get cameras on mount
+  // Start camera
   useEffect(() => {
-    (async () => {
-      try {
-        const cams = await Html5Qrcode.getCameras();
-        setCameras(cams || []);
-        if (cams?.[0]?.id) setCamId(cams[0].id);
-      } catch (e) {
-        setErr("No camera access - try manual input or upload.");
-      }
-    })();
-  }, []);
+    if (!camId) return;
 
-  // start / stop camera controlled by camId / running
-  useEffect(() => {
-    let disposed = false;
-    async function startCamera() {
-      if (!camId) return;
-      // create instance if needed
-      if (!html5Ref.current) {
-        html5Ref.current = new Html5Qrcode(readerId, { verbose: false });
-      }
-      const html5QrCode = html5Ref.current;
-      try {
-        setErr("");
-        setScanningNow(true);
-        await html5QrCode.start(
-          { deviceId: { exact: camId } },
-          {
-            fps: 15, // faster
-            qrbox: { width: 300, height: 300 }, // box size
-            formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
-          },
-          onScanSuccess,
-          onScanFailure
-        );
-        setRunning(true);
-        setScanningNow(false);
-        // try to set torch if requested
-        setTimeout(() => {
-          if (torchOn) toggleTorch(true, true);
-        }, 250);
-      } catch (e) {
-        setErr("Could not start camera: " + (e?.message || e));
-        setRunning(false);
-        setScanningNow(false);
-      }
-    }
+    const html5 = new Html5Qrcode(readerId);
+    html5Ref.current = html5;
 
-    async function stopCamera() {
-      const instance = html5Ref.current;
-      if (!instance) return;
-      try {
-        await instance.stop();
-        try {
-          instance.clear();
-        } catch {}
-      } catch {}
-      setRunning(false);
-    }
-
-    // start automatically if camId present
-    if (camId) {
-      startCamera();
-    } else {
-      stopCamera();
-    }
+    html5
+      .start(
+        { deviceId: { exact: camId } },
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        onScanSuccess
+      )
+      .catch((e) => setError("Failed to start camera: " + e.message));
 
     return () => {
-      disposed = true;
-      // stop on unmount
-      (async () => {
-        try {
-          if (html5Ref.current) {
-            await html5Ref.current.stop();
-            html5Ref.current.clear();
-            html5Ref.current = null;
-          }
-        } catch {}
-      })();
+      html5.stop().catch(() => {});
+      html5.clear();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [camId]);
 
-  // callback on successful decode from camera
-  function onScanSuccess(decodedText) {
-    handleDecoded(decodedText, { fromCamera: true });
-  }
+  const onScanSuccess = async (decodedText) => {
+    const tok = extractToken(decodedText);
+    if (!tok) return;
+    setToken(tok);
+    await handleVerify(tok);
+  };
 
-  // onScanFailure is called frequently; we can use it to show scanning pulse
-  function onScanFailure(_err) {
-    // don't flood UI
-    // we set a brief scanning indicator
-    setScanningNow(true);
-    clearTimeout(window.__du_scan_pulse__);
-    window.__du_scan_pulse__ = setTimeout(() => setScanningNow(false), 250);
-  }
-
-  // decode from file upload
-  async function scanFile(file) {
-    if (!file || !html5Ref.current) return;
-    setScanningNow(true);
+  const extractToken = (str) => {
     try {
-      const result = await html5Ref.current.scanFileV2(file, true);
-      // scanFileV2 returns an array of results or a single result depending on version
-      const decodedText = Array.isArray(result)
-        ? result[0]?.decodedText || ""
-        : result?.decodedText || "";
-      if (decodedText) handleDecoded(decodedText, { fromFile: true });
-      else setErr("No QR detected in image");
-    } catch (e) {
-      setErr("Failed to scan image: " + (e?.message || e));
-    } finally {
-      setScanningNow(false);
+      const obj = JSON.parse(str);
+      return obj.token || obj.t || str;
+    } catch {
+      return str.trim();
     }
-  }
+  };
 
-  // parse decoded/captured text. Accepts JSON {"t":"..."} or plain tokens.
-  function extractTokenFromDecoded(text) {
-    if (!text) return "";
-    const s = String(text).trim();
-    // try JSON parse
-    try {
-      const parsed = JSON.parse(s);
-      if (parsed && (parsed.t || parsed.token))
-        return String(parsed.t || parsed.token);
-    } catch {}
-    // If QR adds extra whitespace or newlines, clean it
-    // Many hardware scanners produce the raw text token or the JSON string; both covered.
-    // If the scanned string contains a token inside (e.g. "t:abc..."), attempt to extract with regex
-    const m = s.match(/[A-Za-z0-9_-]{8,}/);
-    return m ? m[0] : s;
-  }
-
-  // main decoded handler with debounce to avoid repeats
-  async function handleDecoded(
-    decodedText,
-    { fromCamera = false, fromFile = false } = {}
-  ) {
-    const now = Date.now();
-    let t = extractTokenFromDecoded(decodedText);
-    if (!t) return;
-    // ignore repeats within 1200ms
-    if (lastSeenRef.current.t === t && now - lastSeenRef.current.ts < 1200)
-      return;
-    lastSeenRef.current = { t, ts: now };
-
-    // update token & auto-check
-    setToken(t);
-    await checkToken(t);
-  }
-
-  // check token with backend
-  async function checkToken(t) {
+  const handleVerify = async (tok) => {
     setBusy(true);
-    setErr("");
+    setError("");
     try {
-      // if camera running, keep it running; just show busy
-      const out = await verifyCheck(t);
-      setBusy(false);
-      if (out?.ok) {
-        setResult(out);
-        // feedback (beep/vibrate)
-        try {
-          beepRef.current && beepRef.current(1400, 0.08);
-          navigator.vibrate && navigator.vibrate(80);
-        } catch {}
-      } else {
-        setResult(null);
-        setErr(out?.error || "Not recognized");
-      }
+      const res = await verifyCheckPublic(tok);
+      if (!res.ok) throw new Error(res.error || "Invalid token");
+      setResult(res);
+      toast.success("QR verified successfully!");
     } catch (e) {
-      setBusy(false);
-      setErr(e?.message || "Network error");
+      setError(e.message);
+      toast.error("Invalid or used QR code!");
       setResult(null);
+    } finally {
+      setBusy(false);
     }
-  }
+  };
 
-  // admit (mark used) — pause camera briefly while admitting
-  async function admit() {
-    if (!token || busy) return;
+  const handleAdmit = async () => {
+    if (!token || !pin) {
+      setError("PIN required");
+      toast.error("Please enter PIN");
+      return;
+    }
     setBusy(true);
-    setErr("");
+    setError("");
     try {
-      // pause camera to avoid duplicates
-      if (html5Ref.current && running) {
-        try {
-          await html5Ref.current.pause(true);
-        } catch {}
-      }
-
-      const out = await verifyUse(token.trim());
-      setBusy(false);
-
-      // resume camera after 700ms
-      setTimeout(async () => {
-        try {
-          if (html5Ref.current && running) await html5Ref.current.resume();
-        } catch {}
-      }, 700);
-
-      if (out?.ok) {
-        setResult(out);
-        beepRef.current && beepRef.current(1800, 0.12);
-        navigator.vibrate && navigator.vibrate([60, 30, 30]);
-      } else {
-        setErr(out?.error || "Admit failed");
-      }
+      const res = await verifyUseWithPin(token, pin);
+      if (!res.ok) throw new Error(res.error || "Admission failed");
+      setResult(res);
+      toast.success("Guest admitted successfully ✅");
     } catch (e) {
+      setError(e.message);
+      toast.error(e.message || "Admission failed ❌");
+    } finally {
       setBusy(false);
-      setErr(e?.message || "Network error");
     }
-  }
-
-  // toggle torch (best-effort)
-  async function toggleTorch(turnOn, silent = false) {
-    try {
-      if (!html5Ref.current) return;
-      const caps = await html5Ref.current.getRunningTrackCameraCapabilities();
-      if (!caps || !caps.torchFeature?.isSupported) {
-        if (!silent) setErr("Torch not supported by this camera.");
-        return;
-      }
-      await html5Ref.current.applyVideoConstraints({
-        advanced: [{ torch: !!turnOn }],
-      });
-      setTorchOn(!!turnOn);
-    } catch (e) {
-      if (!silent) setErr("Failed to toggle torch.");
-    }
-  }
-
-  // Stop camera completely
-  async function stopCamera() {
-    try {
-      if (html5Ref.current) {
-        await html5Ref.current.stop();
-        try {
-          html5Ref.current.clear();
-        } catch {}
-        html5Ref.current = null;
-      }
-    } catch {}
-    setRunning(false);
-  }
-
-  // keyboard listener for hardware scanners that emulate keyboard input.
-  useEffect(() => {
-    function onKey(e) {
-      // Many scanners end with 'Enter' — we collect until Enter
-      const now = Date.now();
-      const kb = kbBufferRef.current;
-      // reset buffer if paused long time
-      if (now - kb.lastTs > 1500) kb.buf = "";
-      kb.lastTs = now;
-
-      if (e.key === "Enter") {
-        const captured = kb.buf.trim();
-        kb.buf = "";
-        if (captured) {
-          handleDecoded(captured, { fromCamera: false });
-        }
-      } else if (e.key.length === 1) {
-        kb.buf += e.key;
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  // allow manual paste into input (some scanners paste directly)
-  async function onPasteInput(e) {
-    const pasted = e.clipboardData?.getData("text") || e.target.value;
-    if (pasted) {
-      const t = extractTokenFromDecoded(pasted);
-      setToken(t);
-      await checkToken(t);
-    }
-  }
-
-  // UI helpers
-  const mayAdmit = !!token && !busy && result?.status === "UNUSED";
+  };
 
   return (
-    <div style={style.wrap}>
-      <div style={style.top}>
-        <img
-          src="/du-logo.png"
-          alt="Dominion University"
-          style={{ height: 40 }}
-        />
-        <div style={style.title}>Dominion University • Entrance Scanner</div>
-      </div>
+    <div
+      style={{
+        maxWidth: 900,
+        margin: "auto",
+        padding: 16,
+        fontFamily: "Inter, sans-serif",
+      }}
+    >
+      <h2 style={{ textAlign: "center", color: "#0B2E4E" }}>
+        Dominion University • Gate Scanner
+      </h2>
 
-      <div style={style.row}>
-        <div style={style.card}>
-          <div style={style.head}>
-            <div>Scanner</div>
-
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <select
-                aria-label="Camera"
-                style={style.select}
-                value={camId}
-                onChange={(e) => setCamId(e.target.value)}
-              >
-                {cameras.length === 0 && <option value="">No camera</option>}
-                {cameras.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.label || c.id}
-                  </option>
-                ))}
-              </select>
-
-              <button
-                type="button"
-                style={style.btn(!running)}
-                onClick={() => {
-                  if (running) {
-                    stopCamera();
-                  } else if (camId) {
-                    // reassign camId to trigger start logic
-                    setCamId((v) => (v ? v : ""));
-                    // start handled by effect
-                  }
-                }}
-              >
-                {running ? "Stop" : "Start"}
-              </button>
-
-              <button
-                type="button"
-                style={style.btn(false)}
-                onClick={() => toggleTorch(!torchOn)}
-                title="Toggle torch (if supported)"
-              >
-                {torchOn ? "Torch Off" : "Torch On"}
-              </button>
-
-              <label style={{ display: "inline-block" }}>
-                <input
-                  style={{ display: "none" }}
-                  type="file"
-                  accept="image/*"
-                  onChange={(ev) => {
-                    const f = ev.target.files && ev.target.files[0];
-                    if (f) scanFile(f);
-                    ev.target.value = null;
-                  }}
-                />
-                <span style={{ ...style.btn(false), padding: "8px 10px" }}>
-                  Upload Image
-                </span>
-              </label>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: window.innerWidth < 768 ? "column" : "row",
+          gap: 16,
+          marginTop: 20,
+        }}
+      >
+        <div style={{ flex: 1 }}>
+          <div
+            id={readerId}
+            style={{
+              width: "100%",
+              minHeight: 300,
+              border: "2px dashed #e5e7eb",
+              borderRadius: 10,
+              overflow: "hidden",
+            }}
+          ></div>
+          <select
+            style={{
+              width: "100%",
+              marginTop: 10,
+              padding: 8,
+              borderRadius: 8,
+            }}
+            value={camId}
+            onChange={(e) => setCamId(e.target.value)}
+          >
+            {cameras.map((cam) => (
+              <option key={cam.id} value={cam.id}>
+                {cam.label || cam.id}
+              </option>
+            ))}
+          </select>
+          {error && (
+            <div style={{ color: "red", marginTop: 10, textAlign: "center" }}>
+              {error}
             </div>
-          </div>
-
-          <div style={style.body}>
-            <div id={readerId} style={style.readerBox}>
-              {/* overlay scanning pulse */}
-              <div style={style.overlay}>
-                <div style={style.scanningPulse}>
-                  {scanningNow
-                    ? "Scanning…"
-                    : running
-                    ? "Ready"
-                    : "Camera stopped"}
-                </div>
-              </div>
-
-              {/* html5-qrcode injects video element into the readerId container */}
-            </div>
-
-            {/* manual token input */}
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 13, marginBottom: 6 }}>
-                Manual token (or paste scanned result)
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <input
-                  placeholder="Paste token or scanned JSON here"
-                  style={{
-                    flex: 1,
-                    height: 40,
-                    borderRadius: 8,
-                    border: `1px solid ${DU.line}`,
-                    padding: "0 10px",
-                  }}
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  onPaste={onPasteInput}
-                />
-                <button
-                  style={style.btn(false)}
-                  onClick={() => {
-                    setToken("");
-                    setResult(null);
-                    setErr("");
-                  }}
-                >
-                  Clear
-                </button>
-                <button
-                  style={style.btn(true)}
-                  onClick={() => token && checkToken(token)}
-                  disabled={!token || busy}
-                >
-                  {busy ? "Checking…" : "Check"}
-                </button>
-                <button
-                  style={{ ...style.btn(true), opacity: mayAdmit ? 1 : 0.6 }}
-                  onClick={admit}
-                  disabled={!mayAdmit}
-                >
-                  {busy ? "Marking…" : "Admit"}
-                </button>
-              </div>
-              <div style={{ marginTop: 8 }}>
-                <span style={style.hint}>
-                  Tip: If you use a hardware scanner (gun), it will usually type
-                  the scanned string into this page — press Enter or the Check
-                  button will auto-run.
-                </span>
-              </div>
-
-              {err && <div style={{ color: DU.bad, marginTop: 8 }}>{err}</div>}
-            </div>
-          </div>
+          )}
         </div>
 
-        <div style={style.card}>
-          <div style={style.head}>Result</div>
-          <div style={style.body}>
-            {!result ? (
-              <div style={style.hint}>
-                Scan a QR (via camera) or paste a token to view status.
-              </div>
-            ) : (
-              <div style={style.resultRow}>
-                <div style={{ marginBottom: 8 }}>
-                  <strong>Status: </strong>
-                  {result.status === "USED" ? (
-                    <span style={{ color: DU.bad, fontWeight: 800 }}>USED</span>
-                  ) : result.status === "UNUSED" ? (
-                    <span style={{ color: DU.ok, fontWeight: 800 }}>
-                      UNUSED
-                    </span>
-                  ) : (
-                    <span style={{ fontWeight: 800 }}>{result.status}</span>
-                  )}
-                </div>
+        <div
+          style={{
+            flex: 1,
+            border: "1px solid #ddd",
+            borderRadius: 10,
+            padding: 16,
+            background: "#fff",
+          }}
+        >
+          <h3 style={{ color: "#0B2E4E" }}>Scan Result</h3>
+          {busy && <p>Loading...</p>}
+          {!result && !busy && <p>No scan yet</p>}
 
-                {result.guest && (
-                  <div style={{ marginBottom: 8 }}>
-                    <div>
-                      <strong>Guest:</strong> {result.guest.guestName}
-                    </div>
-                    <div>
-                      <strong>Student:</strong> {result.student?.studentName}
-                    </div>
-                    <div>
-                      <strong>Matric:</strong> {result.student?.matricNo}
-                    </div>
-                  </div>
+          {result && (
+            <>
+              <p>
+                <strong>Status:</strong>{" "}
+                {result.status === "USED" ? (
+                  <span style={{ color: "red" }}>USED</span>
+                ) : (
+                  <span style={{ color: "green" }}>UNUSED</span>
                 )}
-
-                <div>
-                  <strong>Token:</strong>{" "}
-                  <span style={style.mono}>{token}</span>
-                </div>
-
-                {result.usedAt && (
-                  <div style={{ marginTop: 8 }}>
-                    <strong>Used at:</strong>{" "}
-                    {new Date(result.usedAt).toLocaleString()}
-                  </div>
-                )}
-                {result.usedBy && (
-                  <div style={{ marginTop: 4 }}>
-                    <strong>Checked by:</strong> {result.usedBy}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+              </p>
+              {result.guest && (
+                <>
+                  <p>
+                    <strong>Guest:</strong> {result.guest.guestName}
+                  </p>
+                  <p>
+                    <strong>Student:</strong> {result.student?.studentName}
+                  </p>
+                  <p>
+                    <strong>Matric:</strong> {result.student?.matricNo}
+                  </p>
+                </>
+              )}
+              {result.status === "UNUSED" && (
+                <>
+                  <input
+                    type="password"
+                    value={pin}
+                    onChange={(e) => setPin(e.target.value)}
+                    placeholder="Enter PIN"
+                    style={{
+                      width: "100%",
+                      padding: 8,
+                      borderRadius: 8,
+                      border: "1px solid #ccc",
+                      marginTop: 8,
+                    }}
+                  />
+                  <button
+                    onClick={handleAdmit}
+                    disabled={busy}
+                    style={{
+                      background: "#0B2E4E",
+                      color: "#fff",
+                      padding: "8px 16px",
+                      borderRadius: 8,
+                      border: "none",
+                      marginTop: 12,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Admit Guest
+                  </button>
+                </>
+              )}
+            </>
+          )}
         </div>
       </div>
     </div>
   );
-}
+};
+
+export default Scanner;
