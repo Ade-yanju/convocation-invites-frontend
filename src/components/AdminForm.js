@@ -363,21 +363,24 @@ export default function AdminForm() {
 
   /* ---------------- Actions available in UI ---------------- */
 
-  // download a single generated invite PDF (prefer downloadUrl)
-  async function handleDownloadSingle(r) {
-    try {
-      setStatus(`Downloading ${r.filename || "invite.pdf"}...`);
-      const url = r.downloadUrl || r.publicUrl || "";
-      if (!url) throw new Error("No download URL available for this invite.");
-      await downloadFile(
-        url,
-        r.filename || `invite-${r.token || Date.now()}.pdf`
-      );
-      setStatus("Downloaded.");
-    } catch (err) {
-      setStatus(`Download failed: ${err?.message || err}`);
-    }
+// In AdminForm.jsx, replace the handleDownloadSingle function:
+
+async function handleDownloadSingle(r) {
+  try {
+    setStatus(`Downloading ${r.filename || "invite.pdf"}...`);
+    const url = r.downloadUrl || r.publicUrl || "";
+    if (!url) throw new Error("No download URL available for this invite.");
+    
+    // Download directly from Cloudinary (not through proxy)
+    await downloadFile(
+      url,
+      r.filename || `invite-${r.token || Date.now()}.pdf`
+    );
+    setStatus("Downloaded.");
+  } catch (err) {
+    setStatus(`Download failed: ${err?.message || err}`);
   }
+}
 
   // somewhere in AdminForm.jsx (if you want to use fetchDownloadAsBlob)
 
