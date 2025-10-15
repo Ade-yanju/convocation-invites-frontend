@@ -94,10 +94,9 @@ export async function verifyCheck(token) {
 
 export async function verifyUse(token) {
   try {
-    const headers = await authHeaders({ "Content-Type": "application/json" });
-    const r = await fetch(`${API}/verify-json/use`, {
+    const r = await fetch(`${API}/verify/json/use`, {
       method: "POST",
-      headers,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token }),
     });
     return await r.json();
@@ -108,7 +107,7 @@ export async function verifyUse(token) {
 
 export async function verifyCheckPublic(token) {
   try {
-    const r = await fetch(`${API}/verify-json/check`, {
+    const r = await fetch(`${API}/verify/json/check`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token }),
