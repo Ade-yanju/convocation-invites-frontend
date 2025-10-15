@@ -1,9 +1,9 @@
 import React, { useState } from "react";
-import { QrScanner } from "@yudiel/react-qr-scanner";
+import { Scanner } from "@yudiel/react-qr-scanner";
 import { verifyCheckPublic, verifyUse } from "../api";
 import { useNavigate } from "react-router-dom";
 
-export default function Scanner() {
+export default function ScannerPage() {
   const [guest, setGuest] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -43,7 +43,6 @@ export default function Scanner() {
       if (res.ok) {
         setGuest({ ...guest, status: "USED" });
         setSuccess(true);
-        // pulse success effect then reset
         setTimeout(() => setSuccess(false), 1500);
       } else {
         setError(res.error || "Error admitting guest");
@@ -79,8 +78,8 @@ export default function Scanner() {
       {!guest && !error && (
         <>
           <div style={{ width: "100%", borderRadius: 12, overflow: "hidden" }}>
-            <QrScanner
-              onDecode={(result) => {
+            <Scanner
+              onScan={(result) => {
                 if (result) handleScan(result);
               }}
               onError={(err) => console.error(err)}
