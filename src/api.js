@@ -6,8 +6,7 @@ import {
   onAuthStateChanged,
 } from "firebase/auth";
 
-// API base (set REACT_APP_API in client/.env to override)
-const API =
+export const API =
   process.env.REACT_APP_API ||
   (typeof window !== "undefined"
     ? window.location.origin.replace(/\/$/, "")
@@ -16,10 +15,17 @@ const API =
 
 async function idToken() {
   const u = auth.currentUser;
-  return u ? await u.getIdToken(/* forceRefresh */ false) : null;
+  return u ? await u.getIdToken(false) : null;
 }
 
-/** Firebase email/password login */
+async function authHeaders(extra = {}) {
+  const t = await idToken();
+  return {
+    ...(t ? { Authorization: `Bearer ${t}` } : {}),
+    ...extra,
+  };
+}
+
 export async function login(email, password) {
   try {
     await signInWithEmailAndPassword(auth, email, password);
@@ -41,42 +47,40 @@ export async function logout() {
 export function isAuthed() {
   return !!auth.currentUser;
 }
+
 export function onAuth(cb) {
   return onAuthStateChanged(auth, cb);
 }
 
-/** Helper to add Authorization header when idToken exists */
-async function authHeaders() {
-  const t = await idToken();
-  return t ? { Authorization: `Bearer ${t}` } : {};
-}
-
-/** Admin: create PDFs (removed credentials: 'include' to avoid CORS preflight credential mismatch unless you specifically need cookies) */
 export async function createStudent(payload) {
   try {
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await authHeaders()),
-    };
-    const r = await fetch(`${API}/admin/students`, {
+    const response = await fetch(`${API}/admin/students`, {
       method: "POST",
-      headers,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-      // NOTE: do NOT use credentials: "include" here unless server CORS uses credentials:true AND cookies are required.
     });
-    return await r.json();
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Failed: ${response.status} ${text}`);
+    }
+
+    const data = await response.json();
+
+    if (!data.ok) {
+      throw new Error(data.error || "Server failed to generate invites");
+    }
+
+    return { ok: true, files: data.files || [] };
   } catch (e) {
-    return { ok: false, error: e?.message || "Network error" };
+    console.error("createStudent failed:", e);
+    return { ok: false, error: e.message || "Failed to create invites" };
   }
 }
 
-/** Scanner: check token */
 export async function verifyCheck(token) {
   try {
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await authHeaders()),
-    };
+    const headers = await authHeaders({ "Content-Type": "application/json" });
     const r = await fetch(`${API}/verify-json/check`, {
       method: "POST",
       headers,
@@ -88,13 +92,9 @@ export async function verifyCheck(token) {
   }
 }
 
-/** Scanner: mark token USED (atomic) */
 export async function verifyUse(token) {
   try {
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await authHeaders()),
-    };
+    const headers = await authHeaders({ "Content-Type": "application/json" });
     const r = await fetch(`${API}/verify-json/use`, {
       method: "POST",
       headers,
@@ -106,10 +106,66 @@ export async function verifyUse(token) {
   }
 }
 
-/**
- * Download proxy: use this when calling server /admin/download (server will stream and set Content-Disposition).
- * If the server requires auth, we include Authorization header. This returns a blob; callers typically call URL.createObjectURL(blob).
- */
+export async function verifyCheckPublic(token) {
+  try {
+    const r = await fetch(`${API}/verify-json/check`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+    return await r.json();
+  } catch (e) {
+    return { ok: false, error: e?.message || "Network error" };
+  }
+}
+
+export async function verifyUseWithPin(token, pin) {
+  try {
+    const r = await fetch(`${API}/verify-json/use-with-pin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, pin }),
+    });
+    return await r.json();
+  } catch (e) {
+    return { ok: false, error: e?.message || "Network error" };
+  }
+}
+
+export async function downloadInvitePdf(token) {
+  try {
+    const t = await idToken();
+    if (!t) return { ok: false, error: "Unauthorized" };
+
+    const r = await fetch(
+      `${API}/admin/download/${encodeURIComponent(token)}`,
+      {
+        method: "GET",
+        headers: { Authorization: `Bearer ${t}` },
+      }
+    );
+
+    if (!r.ok) {
+      let msg = `Failed to download: ${r.status}`;
+      try {
+        const j = await r.json();
+        msg = j?.error || JSON.stringify(j);
+      } catch {
+        try {
+          const txt = await r.text();
+          if (txt) msg = txt;
+        } catch {}
+      }
+      return { ok: false, error: msg };
+    }
+
+    const blob = await r.blob();
+    return { ok: true, blob };
+  } catch (e) {
+    return { ok: false, error: e?.message || "Network error" };
+  }
+}
+
 export async function fetchDownloadAsBlob(downloadUrl) {
   try {
     const headers = await authHeaders();
@@ -119,18 +175,17 @@ export async function fetchDownloadAsBlob(downloadUrl) {
       cache: "no-store",
     });
     if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      throw new Error(`Download failed: ${resp.status} ${text}`);
+      const txt = await resp.text().catch(() => "");
+      throw new Error(`Download failed: ${resp.status} ${txt}`);
     }
     const blob = await resp.blob();
     return {
       ok: true,
       blob,
-      contentType: resp.headers.get("content-type") || "application/pdf",
+      contentType:
+        resp.headers.get("content-type") || "application/octet-stream",
     };
   } catch (e) {
     return { ok: false, error: e?.message || "Download failed" };
   }
 }
-
-export { API };

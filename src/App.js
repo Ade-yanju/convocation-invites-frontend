@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, Link, useLocation } from "react-router-dom";
 import Login from "./components/Login";
 import AdminForm from "./components/AdminForm";
 import Scanner from "./components/Scanner";
+import PublicVerifyPage from "./pages/PublicVerifyPage";
 import { logout } from "./api";
 import { useAuth } from "./authContext";
 
@@ -65,6 +66,7 @@ export default function App() {
       <Nav />
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/verify/:token" element={<PublicVerifyPage />} />
         <Route
           path="/admin"
           element={
