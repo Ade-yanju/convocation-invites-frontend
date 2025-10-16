@@ -107,12 +107,10 @@ export async function verifyUse(token) {
 
 export async function verifyCheckPublic(token) {
   try {
-    const r = await fetch(`${API}/verify/json/check`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token }),
-    });
-    return await r.json();
+    const res = await fetch(
+      `https://invite-server-0gv6.onrender.com/verify-json/check/${token}`
+    );
+    return res.json();
   } catch (e) {
     return { ok: false, error: e?.message || "Network error" };
   }

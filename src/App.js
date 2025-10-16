@@ -13,7 +13,11 @@ const Nav = () => {
   const loc = useLocation();
 
   // Hide navbar on login & public verify page (optional)
-  if (loc.pathname === "/login" || loc.pathname.startsWith("/verify"))
+  if (
+    loc.pathname === "/login" ||
+    loc.pathname.startsWith("/verify") ||
+    loc.pathname.startsWith("/publicverify")
+  )
     return null;
 
   const bar = {
