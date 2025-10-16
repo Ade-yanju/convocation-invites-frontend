@@ -75,7 +75,7 @@ export default function App() {
       <Routes>
         {/* 🧭 Public routes */}
         <Route path="/login" element={<Login />} />
-        <Route path="/verify/:token" element={<PublicVerifyPage />} />
+        <Route path="/publicverify/:token" element={<PublicVerifyPage />} />
 
         {/* 🔐 Protected routes */}
         <Route
