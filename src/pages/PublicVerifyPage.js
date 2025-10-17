@@ -14,15 +14,21 @@ export default function PublicVerifyPage() {
   useEffect(() => {
     async function check() {
       try {
-        const r = await verifyCheckPublic(token);
-        if (r.ok && r.guest) {
-          setGuest(r.guest);
-          setStatus(r.guest.status);
+        if (!token) {
+          setError("Missing verification token");
+          return;
+        }
+        const res = await verifyCheckPublic(token);
+
+        if (res.ok && res.guest) {
+          setGuest(res.guest);
+          setStatus(res.guest.status || "UNUSED");
         } else {
-          setError(r.error || "Invalid or expired QR");
+          throw new Error(res.error || "Invalid or expired QR code");
         }
       } catch (err) {
-        setError("Unable to verify QR at the moment");
+        console.error("Verification failed:", err);
+        setError("Unable to verify invite at this time. Try again later.");
       }
     }
     check();
@@ -31,30 +37,30 @@ export default function PublicVerifyPage() {
   async function markUsed() {
     setConfirming(true);
     try {
-      const r = await verifyUseWithPin(token, pin || "");
-      if (r.ok) {
+      const res = await verifyUseWithPin(token, pin || "");
+      if (res.ok) {
         setStatus("USED");
         setVerified(true);
-        // brief confirmation screen before redirect
         setTimeout(() => {
-          window.location.href = "/admin";
-        }, 1800);
+          window.location.href = "/thank-you";
+        }, 2000);
       } else {
-        alert(r.error || "Failed to admit guest");
+        throw new Error(res.error || "Failed to mark invite as used");
       }
     } catch (err) {
-      alert("Network error while verifying guest");
+      alert(err.message);
     } finally {
       setConfirming(false);
     }
   }
 
+  // Loading or error
   if (error) {
     return (
-      <div style={styles.page}>
+      <div style={styles.container}>
         <div style={styles.card}>
-          <h2 style={styles.title}>❌ Invalid QR</h2>
-          <p style={{ color: "#dc2626" }}>{error}</p>
+          <h2 style={styles.errorTitle}>❌ Invalid Invite</h2>
+          <p style={styles.errorText}>{error}</p>
         </div>
       </div>
     );
@@ -62,51 +68,59 @@ export default function PublicVerifyPage() {
 
   if (!guest) {
     return (
-      <div style={styles.page}>
+      <div style={styles.container}>
         <div style={styles.card}>
-          <h3 style={{ color: "#64748b" }}>Checking QR...</h3>
+          <p style={{ color: "#94a3b8" }}>🔍 Verifying invite, please wait...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div style={styles.page}>
+    <div style={styles.container}>
       <div style={styles.card}>
-        <h2 style={styles.title}>Guest Verification</h2>
+        <div style={{ textAlign: "center" }}>
+          <div style={styles.headerCircle}>
+            <span style={{ fontSize: 28 }}>🎓</span>
+          </div>
+          <h1 style={styles.title}>Convocation Guest Verification</h1>
+          <p style={styles.subtitle}>
+            Welcome! Please present this invite at the gate.
+          </p>
+        </div>
 
-        <p>
-          <b>Guest:</b> {guest.guestName}
-        </p>
-        <p>
-          <b>Student:</b> {guest.student?.studentName}
-        </p>
-        <p>
-          <b>Matric No:</b> {guest.student?.matricNo}
-        </p>
-        <p>
-          <b>Status:</b>{" "}
-          <span
-            style={{
-              color: status === "USED" ? "#dc2626" : "#16a34a",
-              fontWeight: 700,
-            }}
-          >
-            {status}
-          </span>
-        </p>
+        <div style={styles.infoBox}>
+          <p>
+            <b>Guest Name:</b> {guest.guestName || "N/A"}
+          </p>
+          <p>
+            <b>Student Name:</b> {guest.student?.studentName || "N/A"}
+          </p>
+          <p>
+            <b>Matric No:</b> {guest.student?.matricNo || "N/A"}
+          </p>
+          <p>
+            <b>Status:</b>{" "}
+            <span
+              style={{
+                color: status === "USED" ? "#dc2626" : "#16a34a",
+                fontWeight: 600,
+              }}
+            >
+              {status}
+            </span>
+          </p>
+        </div>
 
         {verified && (
-          <div style={{ marginTop: 14, color: "#16a34a", fontWeight: 700 }}>
-            ✅ Guest Verified Successfully!
-          </div>
+          <div style={styles.successBox}>✅ Guest Verified Successfully!</div>
         )}
 
         {status === "UNUSED" && !verified && (
           <>
             <input
               type="password"
-              placeholder="Enter gate PIN (optional)"
+              placeholder="Enter PIN (if required)"
               value={pin}
               onChange={(e) => setPin(e.target.value)}
               style={styles.input}
@@ -116,7 +130,7 @@ export default function PublicVerifyPage() {
               disabled={confirming}
               style={{
                 ...styles.button,
-                background: confirming ? "#64748b" : "#0B2E4E",
+                backgroundColor: confirming ? "#64748b" : "#0B2E4E",
               }}
             >
               {confirming ? "Verifying..." : "✅ Verify Guest"}
@@ -125,8 +139,8 @@ export default function PublicVerifyPage() {
         )}
 
         {status === "USED" && !verified && (
-          <div style={{ marginTop: 12, color: "#dc2626", fontWeight: 600 }}>
-            Already Admitted — Access Logged
+          <div style={styles.usedBox}>
+            ⚠️ This invite has already been verified.
           </div>
         )}
       </div>
@@ -135,31 +149,74 @@ export default function PublicVerifyPage() {
 }
 
 const styles = {
-  page: {
+  container: {
+    minHeight: "100vh",
     display: "flex",
     justifyContent: "center",
     alignItems: "center",
-    minHeight: "100vh",
-    background: "#f8fafc",
-    padding: 16,
+    background: "linear-gradient(to bottom right, #0f172a, #1e293b)",
+    padding: 20,
   },
   card: {
-    background: "#fff",
-    padding: 24,
+    backgroundColor: "#fff",
     borderRadius: 12,
-    boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+    boxShadow: "0 6px 20px rgba(0,0,0,0.15)",
+    padding: 24,
     width: "100%",
-    maxWidth: 350,
+    maxWidth: 400,
     textAlign: "center",
   },
+  headerCircle: {
+    background: "#0B2E4E",
+    width: 60,
+    height: 60,
+    borderRadius: "50%",
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
+    margin: "0 auto 12px",
+    color: "#fff",
+  },
   title: {
-    marginBottom: 12,
+    fontSize: 20,
     color: "#0B2E4E",
+    marginBottom: 6,
+  },
+  subtitle: {
+    fontSize: 13,
+    color: "#64748b",
+    marginBottom: 20,
+  },
+  infoBox: {
+    backgroundColor: "#f8fafc",
+    borderRadius: 8,
+    padding: 14,
+    textAlign: "left",
+    color: "#0f172a",
+    marginBottom: 16,
+  },
+  successBox: {
+    color: "#16a34a",
+    fontWeight: 600,
+    marginBottom: 12,
+  },
+  usedBox: {
+    color: "#dc2626",
+    fontWeight: 600,
+    marginTop: 12,
+  },
+  errorTitle: {
+    color: "#dc2626",
+    marginBottom: 8,
+  },
+  errorText: {
+    color: "#9ca3af",
+    fontSize: 14,
   },
   input: {
     width: "100%",
-    padding: 8,
-    marginTop: 12,
+    padding: 10,
+    marginTop: 10,
     borderRadius: 8,
     border: "1px solid #ddd",
     outline: "none",
