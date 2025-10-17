@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { QrReader } from "react-qr-reader";
+import { QrReader } from "@yudiel/react-qr-scanner";
 import { verifyCheckPublic, verifyUse } from "../api";
 import { useNavigate } from "react-router-dom";
 
