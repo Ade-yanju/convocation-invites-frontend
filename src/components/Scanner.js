@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { QrReader } from "@yudiel/react-qr-scanner";
+import { Scanner } from "@yudiel/react-qr-scanner";
 import { verifyCheckPublic, verifyUse } from "../api";
 import { useNavigate } from "react-router-dom";
 
@@ -80,7 +80,7 @@ export default function ScannerPage() {
         </div>
 
         <div style={styles.qrBox}>
-          <QrReader
+          <Scanner
             onResult={(result, error) => {
               if (!!result) handleResult(result);
             }}
