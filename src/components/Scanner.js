@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useCallback } from "react";
 import { Scanner } from "@yudiel/react-qr-scanner";
 import { verifyCheckPublic, verifyUse } from "../api";
 import { useNavigate } from "react-router-dom";
@@ -11,45 +11,49 @@ export default function ScannerPage() {
   const [success, setSuccess] = useState(false);
   const navigate = useNavigate();
 
-  async function handleResult(result) {
-    if (!result || loading) return;
+  // 🧠 stable callback to avoid re-renders breaking scanner
+  const handleResult = useCallback(
+    async (result) => {
+      if (!result || loading) return;
 
-    setLoading(true);
-    setError("");
-    setGuestData(null);
-    setSuccess(false);
+      setLoading(true);
+      setError("");
+      setGuestData(null);
+      setSuccess(false);
 
-    let token = result.text || result;
+      // @yudiel/react-qr-scanner returns a simple string result
+      let token = result;
 
-    // Robust token extraction
-    try {
-      const url = new URL(token);
-      const parts = url.pathname.split("/");
-      token = parts.pop() || parts.pop();
-    } catch {
-      token = token
-        .replace(/^.*\/verify\//, "")
-        .replace(/[^a-zA-Z0-9\-].*$/, "");
-    }
-
-    try {
-      const response = await verifyCheckPublic(token);
-
-      if (response.ok && response.guest) {
-        setGuestData(response.guest);
-        setSuccess(true);
-      } else {
-        throw new Error(response.error || "Invalid or expired QR code");
+      // try extracting token if full URL is scanned
+      try {
+        const url = new URL(token);
+        const parts = url.pathname.split("/");
+        token = parts.pop() || parts.pop();
+      } catch {
+        token = token
+          .replace(/^.*\/verify\//, "")
+          .replace(/[^a-zA-Z0-9\-].*$/, "");
       }
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-      setScanResult(token);
-    }
-  }
 
-  async function handleAdmit() {
+      try {
+        const response = await verifyCheckPublic(token);
+        if (response.ok && response.guest) {
+          setGuestData(response.guest);
+          setSuccess(true);
+        } else {
+          throw new Error(response.error || "Invalid or expired QR code");
+        }
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+        setScanResult(token);
+      }
+    },
+    [loading]
+  );
+
+  const handleAdmit = async () => {
     if (!scanResult) return;
     setLoading(true);
     try {
@@ -66,7 +70,7 @@ export default function ScannerPage() {
     } finally {
       setLoading(false);
     }
-  }
+  };
 
   return (
     <div style={styles.container}>
@@ -81,10 +85,18 @@ export default function ScannerPage() {
 
         <div style={styles.qrBox}>
           <Scanner
-            onResult={(result, error) => {
-              if (!!result) handleResult(result);
-            }}
+            allowMultiple={false}
+            components={{ audio: false, finder: true }}
             constraints={{ facingMode: "environment" }}
+            onScan={(detected) => {
+              if (detected?.[0]?.rawValue) {
+                handleResult(detected[0].rawValue);
+              }
+            }}
+            onError={(err) => {
+              console.error("Scanner error:", err);
+              setError("Unable to access camera");
+            }}
             style={{ width: "100%" }}
           />
         </div>
@@ -169,42 +181,23 @@ const styles = {
     alignItems: "center",
     marginBottom: 8,
   },
-  title: {
-    fontSize: 22,
-    marginBottom: 6,
-    fontWeight: "600",
-  },
-  subtitle: {
-    fontSize: 14,
-    color: "#94a3b8",
-  },
+  title: { fontSize: 22, marginBottom: 6, fontWeight: "600" },
+  subtitle: { fontSize: 14, color: "#94a3b8" },
   qrBox: {
     border: "2px dashed #334155",
     borderRadius: 10,
     overflow: "hidden",
     marginTop: 16,
   },
-  loadingText: {
-    color: "#3b82f6",
-    textAlign: "center",
-    marginTop: 12,
-  },
-  errorText: {
-    color: "#ef4444",
-    textAlign: "center",
-    marginTop: 12,
-  },
+  loadingText: { color: "#3b82f6", textAlign: "center", marginTop: 12 },
+  errorText: { color: "#ef4444", textAlign: "center", marginTop: 12 },
   resultBox: {
     backgroundColor: "#1e293b",
     borderRadius: 10,
     padding: 14,
     marginTop: 18,
   },
-  resultTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    marginBottom: 6,
-  },
+  resultTitle: { fontSize: 18, fontWeight: "600", marginBottom: 6 },
   button: {
     width: "100%",
     color: "#fff",
