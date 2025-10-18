@@ -11,6 +11,7 @@ export default function PublicVerifyPage() {
   const [confirming, setConfirming] = useState(false);
   const [verified, setVerified] = useState(false);
 
+  // ✅ Step 1: Verify token when page loads
   useEffect(() => {
     async function check() {
       try {
@@ -18,6 +19,7 @@ export default function PublicVerifyPage() {
           setError("Missing verification token");
           return;
         }
+
         const res = await verifyCheckPublic(token);
 
         if (res.ok && res.guest) {
@@ -28,12 +30,14 @@ export default function PublicVerifyPage() {
         }
       } catch (err) {
         console.error("Verification failed:", err);
-        setError("Unable to verify invite at this time. Try again later.");
+        setError("Unable to verify invite at this time.");
       }
     }
+
     check();
   }, [token]);
 
+  // ✅ Step 2: Mark invite as USED
   async function markUsed() {
     setConfirming(true);
     try {
@@ -41,20 +45,17 @@ export default function PublicVerifyPage() {
       if (res.ok) {
         setStatus("USED");
         setVerified(true);
-        setTimeout(() => {
-          window.location.href = "/thank-you";
-        }, 2000);
       } else {
         throw new Error(res.error || "Failed to mark invite as used");
       }
     } catch (err) {
-      alert(err.message);
+      setError(err.message);
     } finally {
       setConfirming(false);
     }
   }
 
-  // Loading or error
+  // ✅ Step 3: Render
   if (error) {
     return (
       <div style={styles.container}>
@@ -83,22 +84,14 @@ export default function PublicVerifyPage() {
           <div style={styles.headerCircle}>
             <span style={{ fontSize: 28 }}>🎓</span>
           </div>
-          <h1 style={styles.title}>Convocation Guest Verification</h1>
-          <p style={styles.subtitle}>
-            Welcome! Please present this invite at the gate.
-          </p>
+          <h1 style={styles.title}>Guest Verification</h1>
+          <p style={styles.subtitle}>Mobile Gate Scan Interface</p>
         </div>
 
         <div style={styles.infoBox}>
-          <p>
-            <b>Guest Name:</b> {guest.guestName || "N/A"}
-          </p>
-          <p>
-            <b>Student Name:</b> {guest.student?.studentName || "N/A"}
-          </p>
-          <p>
-            <b>Matric No:</b> {guest.student?.matricNo || "N/A"}
-          </p>
+          <p><b>Guest Name:</b> {guest.guestName || "N/A"}</p>
+          <p><b>Student:</b> {guest.student?.studentName || "N/A"}</p>
+          <p><b>Matric No:</b> {guest.student?.matricNo || "N/A"}</p>
           <p>
             <b>Status:</b>{" "}
             <span
@@ -112,10 +105,16 @@ export default function PublicVerifyPage() {
           </p>
         </div>
 
+        {/* ✅ Visual Feedback */}
         {verified && (
-          <div style={styles.successBox}>✅ Guest Verified Successfully!</div>
+          <div style={styles.successBox}>✅ Guest Admitted Successfully!</div>
         )}
 
+        {status === "USED" && !verified && (
+          <div style={styles.usedBox}>⚠️ This invite has already been verified.</div>
+        )}
+
+        {/* ✅ Action Section */}
         {status === "UNUSED" && !verified && (
           <>
             <input
@@ -133,15 +132,9 @@ export default function PublicVerifyPage() {
                 backgroundColor: confirming ? "#64748b" : "#0B2E4E",
               }}
             >
-              {confirming ? "Verifying..." : "✅ Verify Guest"}
+              {confirming ? "Verifying..." : "✅ Admit Guest"}
             </button>
           </>
-        )}
-
-        {status === "USED" && !verified && (
-          <div style={styles.usedBox}>
-            ⚠️ This invite has already been verified.
-          </div>
         )}
       </div>
     </div>
