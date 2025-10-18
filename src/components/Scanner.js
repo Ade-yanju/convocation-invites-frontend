@@ -12,6 +12,7 @@ export default function ScannerPage() {
   const navigate = useNavigate();
 
   // 🧠 stable callback to avoid re-renders breaking scanner
+  // Inside handleResult in ScannerPage
   const handleResult = useCallback(
     async (result) => {
       if (!result || loading) return;
@@ -21,18 +22,17 @@ export default function ScannerPage() {
       setGuestData(null);
       setSuccess(false);
 
-      // @yudiel/react-qr-scanner returns a simple string result
       let token = result;
 
-      // try extracting token if full URL is scanned
+      // ✅ Handle both full URLs & plain tokens safely
       try {
         const url = new URL(token);
         const parts = url.pathname.split("/");
-        token = parts.pop() || parts.pop();
+        token = parts.pop() || parts.pop(); // last non-empty part
       } catch {
         token = token
-          .replace(/^.*\/verify\//, "")
-          .replace(/[^a-zA-Z0-9\-].*$/, "");
+          .replace(/^.*\/verify\//, "") // remove URL part if any
+          .replace(/[^a-zA-Z0-9\-].*$/, ""); // sanitize
       }
 
       try {
