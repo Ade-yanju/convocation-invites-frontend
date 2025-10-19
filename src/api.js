@@ -105,9 +105,10 @@ export async function verifyCheck(token) {
 
 export async function verifyUse(token) {
   try {
+    const headers = await authHeaders({ "Content-Type": "application/json" });
     const res = await fetch(`${API}/verify/json/use`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ token }),
     });
     return await res.json();
@@ -120,15 +121,19 @@ export async function verifyUse(token) {
    🌍 Public Verification (Guests)
    ============================== */
 export async function verifyCheckPublic(token) {
+  // 🧹 Ensure the token is Firestore-safe before sending
+  const cleanedToken = String(token)
+    .trim()
+    .replace(/^.*(Admission Token[:\s]*)/i, "")
+    .replace(/^.*\/verify\//, "")
+    .replace(/[^A-Za-z0-9_-]/g, "");
+
   try {
-    const res = await fetch(
-      `https://invite-server-0gv6.onrender.com/verify/json/check`, // ✅ correct route
-      {
-        method: "POST", // ✅ must be POST
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }), // ✅ token passed properly
-      }
-    );
+    const res = await fetch(`${API}/verify/json/check`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: cleanedToken }),
+    });
     return await res.json();
   } catch (e) {
     console.error("verifyCheckPublic failed:", e);
@@ -140,11 +145,17 @@ export async function verifyCheckPublic(token) {
    🔐 PIN-based Use (optional)
    ============================== */
 export async function verifyUseWithPin(token, pin) {
+  const cleanedToken = String(token)
+    .trim()
+    .replace(/^.*(Admission Token[:\s]*)/i, "")
+    .replace(/^.*\/verify\//, "")
+    .replace(/[^A-Za-z0-9_-]/g, "");
+
   try {
     const res = await fetch(`${API}/verify/json/use-with-pin`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token, pin }),
+      body: JSON.stringify({ token: cleanedToken, pin }),
     });
     return await res.json();
   } catch (e) {

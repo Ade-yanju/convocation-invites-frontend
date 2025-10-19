@@ -4,6 +4,7 @@ import { verifyCheckPublic, verifyUse } from "../api";
 import { useNavigate } from "react-router-dom";
 
 export default function ScannerPage() {
+  const [tokenInput, setTokenInput] = useState("");
   const [scanResult, setScanResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [guestData, setGuestData] = useState(null);
@@ -11,57 +12,63 @@ export default function ScannerPage() {
   const [success, setSuccess] = useState(false);
   const navigate = useNavigate();
 
-  // 🧠 stable callback to avoid re-renders breaking scanner
-  // Inside handleResult in ScannerPage
+  // 🧩 Clean token (same as backend)
+  const cleanToken = (raw = "") =>
+    raw
+      .trim()
+      .replace(/^.*(Admission Token[:\s]*)/i, "")
+      .replace(/^.*\/verify\//, "")
+      .replace(/[^A-Za-z0-9_-]/g, "");
+
+  // 🧠 Scan handler
   const handleResult = useCallback(
     async (result) => {
       if (!result || loading) return;
 
-      setLoading(true);
-      setError("");
-      setGuestData(null);
-      setSuccess(false);
-
-      let token = result;
-
-      // ✅ Handle both full URLs & plain tokens safely
-      try {
-        const url = new URL(token);
-        const parts = url.pathname.split("/");
-        token = parts.pop() || parts.pop(); // last non-empty part
-      } catch {
-        token = token
-          .replace(/^.*\/verify\//, "") // remove URL part if any
-          .replace(/[^a-zA-Z0-9\-].*$/, ""); // sanitize
+      const token = cleanToken(result);
+      if (!token) {
+        setError("Invalid QR code: token not found");
+        return;
       }
 
-      try {
-        const response = await verifyCheckPublic(token);
-        if (response.ok && response.guest) {
-          setGuestData(response.guest);
-          setSuccess(true);
-        } else {
-          throw new Error(response.error || "Invalid or expired QR code");
-        }
-      } catch (err) {
-        setError(err.message);
-      } finally {
-        setLoading(false);
-        setScanResult(token);
-      }
+      await verifyToken(token);
     },
     [loading]
   );
 
+  // 🔍 Verify scanned or entered token
+  const verifyToken = async (token) => {
+    setLoading(true);
+    setError("");
+    setGuestData(null);
+    setSuccess(false);
+
+    try {
+      const response = await verifyCheckPublic(token);
+      if (response.ok && response.invite) {
+        setGuestData(response.invite);
+        setSuccess(true);
+        setScanResult(token);
+      } else {
+        throw new Error(response.error || "Invalid or expired token");
+      }
+    } catch (err) {
+      console.error(err);
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ✅ Admit guest
   const handleAdmit = async () => {
     if (!scanResult) return;
     setLoading(true);
     try {
       const res = await verifyUse(scanResult);
       if (res.ok) {
-        setSuccess(true);
-        setError("");
         setGuestData((g) => ({ ...g, status: "USED" }));
+        setSuccess(true);
       } else {
         throw new Error(res.error || "Failed to admit guest");
       }
@@ -75,23 +82,26 @@ export default function ScannerPage() {
   return (
     <div style={styles.container}>
       <div style={styles.card}>
+        {/* HEADER */}
         <div style={{ textAlign: "center", marginBottom: 20 }}>
           <div style={styles.iconCircle}>
             <span style={{ fontSize: 28 }}>📷</span>
           </div>
-          <h1 style={styles.title}>QR Code Scanner</h1>
-          <p style={styles.subtitle}>Scan any guest invite below</p>
+          <h1 style={styles.title}>QR Code & Token Scanner</h1>
+          <p style={styles.subtitle}>
+            Scan QR or enter admission token manually
+          </p>
         </div>
 
+        {/* 🔲 QR SCANNER */}
         <div style={styles.qrBox}>
           <Scanner
             allowMultiple={false}
             components={{ audio: false, finder: true }}
             constraints={{ facingMode: "environment" }}
             onScan={(detected) => {
-              if (detected?.[0]?.rawValue) {
-                handleResult(detected[0].rawValue);
-              }
+              const val = detected?.[0]?.rawValue;
+              if (val) handleResult(val);
             }}
             onError={(err) => {
               console.error("Scanner error:", err);
@@ -101,20 +111,44 @@ export default function ScannerPage() {
           />
         </div>
 
-        {loading && <p style={styles.loadingText}>⏳ Verifying QR code...</p>}
+        {/* ✍️ MANUAL ENTRY */}
+        <div style={{ marginTop: 20 }}>
+          <input
+            type="text"
+            placeholder="Enter Admission Token"
+            value={tokenInput}
+            onChange={(e) => setTokenInput(e.target.value)}
+            style={styles.input}
+          />
+          <button
+            style={styles.button}
+            onClick={() => verifyToken(cleanToken(tokenInput))}
+            disabled={loading || !tokenInput.trim()}
+          >
+            🔍 Check Token
+          </button>
+        </div>
 
+        {/* STATUS MESSAGES */}
+        {loading && <p style={styles.loadingText}>⏳ Verifying token...</p>}
         {error && <p style={styles.errorText}>❌ {error}</p>}
 
+        {/* ✅ GUEST DATA */}
         {guestData && (
           <div style={styles.resultBox}>
             <h3 style={styles.resultTitle}>
-              {success ? "✅ Guest Verified" : "⚠️ Guest Info"}
+              {guestData.status === "USED"
+                ? "⚠️ Already Admitted"
+                : "✅ Guest Verified"}
             </h3>
             <p>
-              <b>Name:</b> {guestData.fullName || "Unknown"}
+              <b>Guest:</b> {guestData.guestName}
             </p>
             <p>
-              <b>Department:</b> {guestData.department || "N/A"}
+              <b>Invited By:</b> {guestData.studentName}
+            </p>
+            <p>
+              <b>Matric No:</b> {guestData.matricNo}
             </p>
             <p>
               <b>Status:</b>{" "}
@@ -136,7 +170,7 @@ export default function ScannerPage() {
                   backgroundColor: loading ? "#64748b" : "#0B2E4E",
                 }}
               >
-                {loading ? "Verifying..." : "✅ Admit Guest"}
+                {loading ? "Processing..." : "✅ Admit Guest"}
               </button>
             )}
 
@@ -168,7 +202,7 @@ const styles = {
     borderRadius: 12,
     padding: 20,
     width: "100%",
-    maxWidth: 400,
+    maxWidth: 420,
     boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
   },
   iconCircle: {
@@ -189,6 +223,16 @@ const styles = {
     overflow: "hidden",
     marginTop: 16,
   },
+  input: {
+    width: "100%",
+    padding: "10px 12px",
+    borderRadius: 8,
+    border: "none",
+    outline: "none",
+    background: "#1e293b",
+    color: "white",
+    marginBottom: 10,
+  },
   loadingText: { color: "#3b82f6", textAlign: "center", marginTop: 12 },
   errorText: { color: "#ef4444", textAlign: "center", marginTop: 12 },
   resultBox: {
@@ -207,5 +251,6 @@ const styles = {
     fontWeight: 600,
     cursor: "pointer",
     marginTop: 10,
+    backgroundColor: "#1d4ed8",
   },
 };
