@@ -28,6 +28,65 @@ async function authHeaders(extra = {}) {
   };
 }
 
+// src/api.js
+// 🧹 Clean token just like backend
+function cleanToken(raw = "") {
+  return String(raw)
+    .trim()
+    .replace(/^.*(Admission Token[:\s]*)/i, "")
+    .replace(/^.*\/verify\//, "")
+    .replace(/[^A-Za-z0-9_-]/g, "");
+}
+
+/**
+ * ✅ Check if token is valid (public)
+ */
+export async function verifyCheckPublic(token) {
+  const cleanedToken = cleanToken(token);
+  try {
+    const res = await fetch(`${API}/verify-json/check`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: cleanedToken }),
+    });
+
+    // 🔸 Handle HTML response or wrong path
+    const text = await res.text();
+    if (!text.startsWith("{")) {
+      console.error("❌ Expected JSON but got HTML:", text.slice(0, 100));
+      throw new Error("Server returned invalid response (check API path)");
+    }
+
+    const json = JSON.parse(text);
+    return json;
+  } catch (err) {
+    console.error("verifyCheckPublic failed:", err);
+    return { ok: false, error: err.message || "Network error" };
+  }
+}
+
+/**
+ * ✅ Mark invite as used (admin/scanner)
+ */
+export async function verifyUse(token) {
+  const cleanedToken = cleanToken(token);
+  try {
+    const res = await fetch(`${API}/verify-json/use-with-pin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token: cleanedToken,
+        pin: "1234", // 🔹 Change to your configured PIN (VERIFY_ADMIT_PIN)
+      }),
+    });
+    const json = await res.json();
+    return json;
+  } catch (err) {
+    console.error("verifyUse failed:", err);
+    return { ok: false, error: err.message || "Network error" };
+  }
+}
+
 /* ==============================
    🔑 Authentication Functions
    ============================== */
@@ -99,44 +158,6 @@ export async function verifyCheck(token) {
     });
     return await res.json();
   } catch (e) {
-    return { ok: false, error: e?.message || "Network error" };
-  }
-}
-
-export async function verifyUse(token) {
-  try {
-    const headers = await authHeaders({ "Content-Type": "application/json" });
-    const res = await fetch(`${API}/verify/json/use`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ token }),
-    });
-    return await res.json();
-  } catch (e) {
-    return { ok: false, error: e?.message || "Network error" };
-  }
-}
-
-/* ==============================
-   🌍 Public Verification (Guests)
-   ============================== */
-export async function verifyCheckPublic(token) {
-  // 🧹 Ensure the token is Firestore-safe before sending
-  const cleanedToken = String(token)
-    .trim()
-    .replace(/^.*(Admission Token[:\s]*)/i, "")
-    .replace(/^.*\/verify\//, "")
-    .replace(/[^A-Za-z0-9_-]/g, "");
-
-  try {
-    const res = await fetch(`${API}/verify/json/check`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: cleanedToken }),
-    });
-    return await res.json();
-  } catch (e) {
-    console.error("verifyCheckPublic failed:", e);
     return { ok: false, error: e?.message || "Network error" };
   }
 }
