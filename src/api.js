@@ -42,26 +42,21 @@ function cleanToken(raw = "") {
  * ✅ Check if token is valid (public)
  */
 export async function verifyCheckPublic(token) {
-  const cleanedToken = cleanToken(token);
+  const cleanedToken = String(token || "")
+    .trim()
+    .replace(/^.*\/verify\//, "")
+    .replace(/[^A-Za-z0-9_-]/g, "");
+
   try {
-    const res = await fetch(`${API}/verify-json/check`, {
+    const res = await fetch(`${API}/verify/json/check`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: cleanedToken }),
     });
-
-    // 🔸 Handle HTML response or wrong path
-    const text = await res.text();
-    if (!text.startsWith("{")) {
-      console.error("❌ Expected JSON but got HTML:", text.slice(0, 100));
-      throw new Error("Server returned invalid response (check API path)");
-    }
-
-    const json = JSON.parse(text);
-    return json;
-  } catch (err) {
-    console.error("verifyCheckPublic failed:", err);
-    return { ok: false, error: err.message || "Network error" };
+    return await res.json();
+  } catch (e) {
+    console.error("verifyCheckPublic failed:", e);
+    return { ok: false, error: e?.message || "Network error" };
   }
 }
 

@@ -1,3 +1,4 @@
+// client/src/pages/ScannerPage.jsx
 import React, { useState, useCallback } from "react";
 import { Scanner } from "@yudiel/react-qr-scanner";
 import { verifyCheckPublic, verifyUse } from "../api";
@@ -9,58 +10,44 @@ export default function ScannerPage() {
   const [loading, setLoading] = useState(false);
   const [guestData, setGuestData] = useState(null);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState(false);
   const navigate = useNavigate();
 
-  // 🧩 Clean token (same as backend)
   const cleanToken = (raw = "") =>
     raw
       .trim()
-      .replace(/^.*(Admission Token[:\s]*)/i, "")
       .replace(/^.*\/verify\//, "")
       .replace(/[^A-Za-z0-9_-]/g, "");
 
-  // 🧠 Scan handler
-  const handleResult = useCallback(
-    async (result) => {
-      if (!result || loading) return;
-
-      const token = cleanToken(result);
-      if (!token) {
-        setError("Invalid QR code: token not found");
-        return;
-      }
-
-      await verifyToken(token);
-    },
-    [loading]
-  );
-
-  // 🔍 Verify scanned or entered token
   const verifyToken = async (token) => {
     setLoading(true);
     setError("");
     setGuestData(null);
-    setSuccess(false);
-
     try {
-      const response = await verifyCheckPublic(token);
-      if (response.ok && response.invite) {
-        setGuestData(response.invite);
-        setSuccess(true);
+      const res = await verifyCheckPublic(token);
+      if (res.ok && res.invite) {
+        setGuestData(res.invite);
         setScanResult(token);
       } else {
-        throw new Error(response.error || "Invalid or expired token");
+        throw new Error(res.error || "Invalid token");
       }
-    } catch (err) {
-      console.error(err);
-      setError(err.message);
+    } catch (e) {
+      setError(e.message);
     } finally {
       setLoading(false);
     }
   };
 
-  // ✅ Admit guest
+  const handleScanResult = useCallback((detected) => {
+    const raw = detected?.[0]?.rawValue || "";
+    if (!raw) return;
+    const token = cleanToken(raw);
+    if (!token) {
+      setError("Invalid QR: no token found");
+      return;
+    }
+    verifyToken(token);
+  }, []);
+
   const handleAdmit = async () => {
     if (!scanResult) return;
     setLoading(true);
@@ -68,189 +55,110 @@ export default function ScannerPage() {
       const res = await verifyUse(scanResult);
       if (res.ok) {
         setGuestData((g) => ({ ...g, status: "USED" }));
-        setSuccess(true);
       } else {
-        throw new Error(res.error || "Failed to admit guest");
+        throw new Error(res.error || "Failed to admit");
       }
-    } catch (err) {
-      setError(err.message);
+    } catch (e) {
+      setError(e.message);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div style={styles.container}>
-      <div style={styles.card}>
-        {/* HEADER */}
-        <div style={{ textAlign: "center", marginBottom: 20 }}>
-          <div style={styles.iconCircle}>
-            <span style={{ fontSize: 28 }}>📷</span>
-          </div>
-          <h1 style={styles.title}>QR Code & Token Scanner</h1>
-          <p style={styles.subtitle}>
-            Scan QR or enter admission token manually
-          </p>
+    <div style={{ padding: 20, display: "flex", justifyContent: "center" }}>
+      <div
+        style={{
+          width: 420,
+          background: "#111827",
+          padding: 20,
+          borderRadius: 12,
+        }}
+      >
+        <div style={{ textAlign: "center" }}>
+          <h2 style={{ color: "white" }}>QR Code & Token Scanner</h2>
+          <p style={{ color: "#94a3b8" }}>Scan QR or paste token</p>
         </div>
 
-        {/* 🔲 QR SCANNER */}
-        <div style={styles.qrBox}>
+        <div
+          style={{
+            borderRadius: 8,
+            overflow: "hidden",
+            border: "2px dashed #334155",
+          }}
+        >
           <Scanner
             allowMultiple={false}
             components={{ audio: false, finder: true }}
             constraints={{ facingMode: "environment" }}
-            onScan={(detected) => {
-              const val = detected?.[0]?.rawValue;
-              if (val) handleResult(val);
-            }}
-            onError={(err) => {
-              console.error("Scanner error:", err);
-              setError("Unable to access camera");
-            }}
+            onScan={(d) => handleScanResult(d)}
+            onError={(err) => setError("Unable to access camera")}
             style={{ width: "100%" }}
           />
         </div>
 
-        {/* ✍️ MANUAL ENTRY */}
-        <div style={{ marginTop: 20 }}>
+        <div style={{ marginTop: 12 }}>
           <input
-            type="text"
-            placeholder="Enter Admission Token"
             value={tokenInput}
             onChange={(e) => setTokenInput(e.target.value)}
-            style={styles.input}
+            placeholder="Enter admission token"
+            style={{
+              width: "100%",
+              padding: 10,
+              borderRadius: 6,
+              background: "#0f172a",
+              color: "white",
+              border: "none",
+            }}
           />
           <button
-            style={styles.button}
             onClick={() => verifyToken(cleanToken(tokenInput))}
-            disabled={loading || !tokenInput.trim()}
+            style={{ marginTop: 8, width: "100%", padding: 10 }}
           >
-            🔍 Check Token
+            Check Token
           </button>
         </div>
 
-        {/* STATUS MESSAGES */}
-        {loading && <p style={styles.loadingText}>⏳ Verifying token...</p>}
-        {error && <p style={styles.errorText}>❌ {error}</p>}
+        {loading && (
+          <div style={{ color: "#3b82f6", marginTop: 10 }}>Verifying...</div>
+        )}
+        {error && (
+          <div style={{ color: "#ef4444", marginTop: 10 }}>{error}</div>
+        )}
 
-        {/* ✅ GUEST DATA */}
         {guestData && (
-          <div style={styles.resultBox}>
-            <h3 style={styles.resultTitle}>
-              {guestData.status === "USED"
-                ? "⚠️ Already Admitted"
-                : "✅ Guest Verified"}
-            </h3>
-            <p>
+          <div
+            style={{
+              marginTop: 12,
+              background: "#0b1220",
+              padding: 12,
+              borderRadius: 8,
+            }}
+          >
+            <div>
               <b>Guest:</b> {guestData.guestName}
-            </p>
-            <p>
-              <b>Invited By:</b> {guestData.studentName}
-            </p>
-            <p>
-              <b>Matric No:</b> {guestData.matricNo}
-            </p>
-            <p>
-              <b>Status:</b>{" "}
-              <span
-                style={{
-                  color: guestData.status === "USED" ? "#dc2626" : "#16a34a",
-                }}
-              >
-                {guestData.status}
-              </span>
-            </p>
+            </div>
+            <div>
+              <b>Student:</b> {guestData.studentName}
+            </div>
+            <div>
+              <b>Matric:</b> {guestData.matricNo}
+            </div>
+            <div>
+              <b>Status:</b> {guestData.status}
+            </div>
 
             {guestData.status !== "USED" && (
               <button
                 onClick={handleAdmit}
-                disabled={loading}
-                style={{
-                  ...styles.button,
-                  backgroundColor: loading ? "#64748b" : "#0B2E4E",
-                }}
+                style={{ marginTop: 8, width: "100%", padding: 10 }}
               >
-                {loading ? "Processing..." : "✅ Admit Guest"}
+                Admit & Mark USED
               </button>
             )}
-
-            <button
-              onClick={() => navigate("/dashboard")}
-              style={{ ...styles.button, backgroundColor: "#4b5563" }}
-            >
-              🔙 Back to Dashboard
-            </button>
           </div>
         )}
       </div>
     </div>
   );
 }
-
-const styles = {
-  container: {
-    minHeight: "100vh",
-    background: "linear-gradient(to bottom, #0f172a, #1e293b)",
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 20,
-    color: "white",
-  },
-  card: {
-    backgroundColor: "#111827",
-    borderRadius: 12,
-    padding: 20,
-    width: "100%",
-    maxWidth: 420,
-    boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
-  },
-  iconCircle: {
-    background: "#1d4ed8",
-    borderRadius: "50%",
-    width: 50,
-    height: 50,
-    display: "inline-flex",
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 8,
-  },
-  title: { fontSize: 22, marginBottom: 6, fontWeight: "600" },
-  subtitle: { fontSize: 14, color: "#94a3b8" },
-  qrBox: {
-    border: "2px dashed #334155",
-    borderRadius: 10,
-    overflow: "hidden",
-    marginTop: 16,
-  },
-  input: {
-    width: "100%",
-    padding: "10px 12px",
-    borderRadius: 8,
-    border: "none",
-    outline: "none",
-    background: "#1e293b",
-    color: "white",
-    marginBottom: 10,
-  },
-  loadingText: { color: "#3b82f6", textAlign: "center", marginTop: 12 },
-  errorText: { color: "#ef4444", textAlign: "center", marginTop: 12 },
-  resultBox: {
-    backgroundColor: "#1e293b",
-    borderRadius: 10,
-    padding: 14,
-    marginTop: 18,
-  },
-  resultTitle: { fontSize: 18, fontWeight: "600", marginBottom: 6 },
-  button: {
-    width: "100%",
-    color: "#fff",
-    border: "none",
-    borderRadius: 8,
-    padding: "10px 0",
-    fontWeight: 600,
-    cursor: "pointer",
-    marginTop: 10,
-    backgroundColor: "#1d4ed8",
-  },
-};
