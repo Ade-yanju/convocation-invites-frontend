@@ -1,4 +1,3 @@
-// client/src/pages/ScannerPage.jsx
 import React, { useState, useCallback } from "react";
 import { Scanner } from "@yudiel/react-qr-scanner";
 import { verifyCheckPublic, verifyUse } from "../api";
@@ -6,35 +5,40 @@ import { useNavigate } from "react-router-dom";
 
 export default function ScannerPage() {
   const [tokenInput, setTokenInput] = useState("");
-  const [scanResult, setScanResult] = useState(null);
-  const [loading, setLoading] = useState(false);
   const [guestData, setGuestData] = useState(null);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState(false);
   const navigate = useNavigate();
 
-  // ✅ Sanitiser matches backend
-  const cleanToken = (raw = "") =>
-    String(raw || "")
-      .trim()
-      .replace(/^.*(Admission Token[:\s]*)/i, "")
-      .replace(/^.*\/verify\//, "")
-      .replace(/[^A-Za-z0-9_-]/g, "");
+  const extractToken = (raw) => {
+    if (!raw) return "";
+    let str = String(raw).trim();
+
+    // Try JSON
+    try {
+      const j = JSON.parse(str);
+      if (j.t || j.token) return String(j.t || j.token).trim();
+    } catch (_) {}
+
+    // Try URL
+    const m = str.match(/\/(?:verify|public-verify)\/([A-Za-z0-9_-]{3,255})/i);
+    if (m && m[1]) return m[1];
+
+    // Fallback clean
+    return str.replace(/[^A-Za-z0-9_-]/g, "");
+  };
 
   const verifyToken = async (token) => {
-    setLoading(true);
     setError("");
-    setGuestData(null);
-    setSuccess(false);
+    setLoading(true);
     try {
       const res = await verifyCheckPublic(token);
       if (res.ok && res.invite) {
         setGuestData(res.invite);
-        setSuccess(true);
-        setScanResult(token);
       } else throw new Error(res.error || "Invalid or expired token");
     } catch (e) {
       setError(e.message);
+      setGuestData(null);
     } finally {
       setLoading(false);
     }
@@ -43,24 +47,26 @@ export default function ScannerPage() {
   const handleResult = useCallback(
     async (detected) => {
       if (!detected || loading) return;
-      const raw = detected?.[0]?.rawValue || detected?.[0]?.text || detected;
-      console.log("📷 Scanner raw value:", raw);
-      const token = cleanToken(raw);
+      let raw =
+        Array.isArray(detected) && detected[0]
+          ? detected[0].rawValue || detected[0].text || detected[0]
+          : detected;
+      console.log("📷 Scanner detected:", raw);
+      const token = extractToken(raw);
       if (!token) return setError("Invalid QR content");
       await verifyToken(token);
     },
     [loading]
   );
 
-  const handleAdmit = async () => {
-    if (!scanResult) return;
+  const handleAdmit = async (token) => {
     setLoading(true);
     try {
-      const res = await verifyUse(scanResult);
-      if (res.ok) {
-        setGuestData((g) => ({ ...g, status: "USED" }));
-        setSuccess(true);
-      } else throw new Error(res.error || "Failed to admit guest");
+      const res = await verifyUse(token);
+      if (res.ok && res.invite) {
+        setGuestData({ ...guestData, status: "USED" });
+        alert("✅ Guest admitted successfully!");
+      } else throw new Error(res.error || "Failed to mark as used");
     } catch (e) {
       setError(e.message);
     } finally {
@@ -71,15 +77,10 @@ export default function ScannerPage() {
   return (
     <div style={styles.container}>
       <div style={styles.card}>
-        <div style={{ textAlign: "center", marginBottom: 20 }}>
-          <div style={styles.iconCircle}>
-            <span style={{ fontSize: 28 }}>🎓</span>
-          </div>
-          <h1 style={styles.title}>Convocation Guest Scanner</h1>
-          <p style={styles.subtitle}>
-            Scan QR or enter token manually to verify admission
-          </p>
-        </div>
+        <h1 style={styles.title}>🎓 Guest QR Scanner</h1>
+        <p style={styles.subtitle}>
+          Scan a QR code or enter the admission token manually.
+        </p>
 
         <div style={styles.qrBox}>
           <Scanner
@@ -91,7 +92,7 @@ export default function ScannerPage() {
             }}
             onError={(err) => {
               console.error("Scanner error:", err);
-              setError("Unable to access camera");
+              setError("Camera access failed.");
             }}
             style={{ width: "100%" }}
           />
@@ -107,29 +108,26 @@ export default function ScannerPage() {
           />
           <button
             style={styles.button}
-            onClick={() => verifyToken(cleanToken(tokenInput))}
-            disabled={loading || !tokenInput.trim()}
+            onClick={() => verifyToken(extractToken(tokenInput))}
+            disabled={!tokenInput.trim() || loading}
           >
             🔍 Check Token
           </button>
         </div>
 
-        {loading && <p style={styles.loading}>⏳ Checking...</p>}
-        {error && <p style={styles.error}>❌ {error}</p>}
+        {loading && <p style={styles.loading}>Checking...</p>}
+        {error && <p style={styles.error}>{error}</p>}
 
         {guestData && (
           <div style={styles.resultBox}>
-            <h3 style={styles.resultTitle}>
-              {guestData.status === "USED"
-                ? "⚠️ Already Admitted"
-                : "✅ Guest Verified"}
+            <h3>
+              {guestData.status === "USED" ? "⚠️ Already Used" : "✅ Verified"}
             </h3>
-
             <p>
               <b>Guest:</b> {guestData.guestName}
             </p>
             <p>
-              <b>Invited By:</b> {guestData.studentName}
+              <b>Student:</b> {guestData.studentName}
             </p>
             <p>
               <b>Matric No:</b> {guestData.matricNo}
@@ -148,22 +146,18 @@ export default function ScannerPage() {
 
             {guestData.status !== "USED" && (
               <button
-                onClick={handleAdmit}
-                disabled={loading}
-                style={{
-                  ...styles.button,
-                  backgroundColor: loading ? "#64748b" : "#0B2E4E",
-                }}
+                onClick={() => handleAdmit(guestData.token)}
+                style={{ ...styles.button, backgroundColor: "#0B2E4E" }}
               >
-                {loading ? "Processing..." : "✅ Admit Guest"}
+                ✅ Admit Guest
               </button>
             )}
 
             <button
-              onClick={() => navigate("/dashboard")}
+              onClick={() => navigate("/admin")}
               style={{ ...styles.button, backgroundColor: "#4b5563" }}
             >
-              🔙 Back to Dashboard
+              🔙 Back
             </button>
           </div>
         )}
@@ -175,41 +169,22 @@ export default function ScannerPage() {
 const styles = {
   container: {
     minHeight: "100vh",
-    background: "linear-gradient(180deg, #0B2E4E 0%, #1e3a8a 100%)",
+    background: "linear-gradient(180deg, #0B2E4E, #1e3a8a)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    padding: "24px",
+    padding: "20px",
   },
   card: {
     background: "#fff",
     borderRadius: 16,
     padding: 20,
-    boxShadow: "0 6px 20px rgba(0,0,0,0.1)",
     width: "100%",
     maxWidth: 420,
+    boxShadow: "0 6px 20px rgba(0,0,0,0.1)",
   },
-  iconCircle: {
-    background: "#D4AF37",
-    color: "#fff",
-    height: 60,
-    width: 60,
-    borderRadius: "50%",
-    margin: "0 auto",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  title: {
-    color: "#0B2E4E",
-    fontWeight: 900,
-    fontSize: 20,
-    marginTop: 10,
-  },
-  subtitle: {
-    color: "#6b7280",
-    fontSize: 14,
-  },
+  title: { textAlign: "center", color: "#0B2E4E", fontWeight: 900 },
+  subtitle: { textAlign: "center", color: "#6b7280", marginBottom: 16 },
   qrBox: {
     border: "2px dashed #D4AF37",
     borderRadius: 12,
@@ -218,46 +193,35 @@ const styles = {
   },
   input: {
     width: "100%",
-    padding: "12px 14px",
+    padding: "10px 14px",
+    border: "1px solid #ccc",
     borderRadius: 8,
-    border: "1px solid #d1d5db",
-    fontSize: 14,
     marginBottom: 8,
   },
   button: {
     width: "100%",
     backgroundColor: "#D4AF37",
     color: "#fff",
-    fontWeight: 700,
     border: "none",
     borderRadius: 8,
-    padding: "12px 14px",
+    padding: "12px",
+    fontWeight: 700,
     cursor: "pointer",
-    transition: "0.2s ease-in-out",
-    fontSize: 15,
+    marginBottom: 8,
   },
-  loading: {
-    color: "#0B2E4E",
-    textAlign: "center",
-    marginTop: 8,
-    fontWeight: 500,
-  },
+  loading: { textAlign: "center", color: "#0B2E4E" },
   error: {
-    color: "#dc2626",
-    background: "#fee2e2",
-    padding: 8,
+    backgroundColor: "#fee2e2",
+    color: "#b91c1c",
+    padding: 10,
     borderRadius: 8,
-    fontSize: 14,
-    marginTop: 10,
+    textAlign: "center",
   },
   resultBox: {
+    marginTop: 12,
     background: "#f9fafb",
     padding: 14,
     borderRadius: 12,
-    marginTop: 14,
-  },
-  resultTitle: {
-    fontWeight: 800,
-    color: "#0B2E4E",
+    textAlign: "center",
   },
 };
