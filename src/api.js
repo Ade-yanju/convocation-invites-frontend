@@ -27,6 +27,32 @@ async function authHeaders(extra = {}) {
     ...extra,
   };
 }
+// client/src/api.js (add this near the bottom)
+export async function createStudent(payload) {
+  try {
+    const response = await fetch(`${API}/admin/students`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Failed: ${response.status} ${text}`);
+    }
+
+    const data = await response.json();
+
+    if (!data.ok) {
+      throw new Error(data.error || "Server failed to generate invites");
+    }
+
+    return { ok: true, files: data.files || [] };
+  } catch (e) {
+    console.error("createStudent failed:", e);
+    return { ok: false, error: e.message || "Failed to create invites" };
+  }
+}
 
 // 🧹 Token cleaner
 function cleanToken(raw = "") {
