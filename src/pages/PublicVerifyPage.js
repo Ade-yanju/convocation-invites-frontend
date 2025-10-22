@@ -1,25 +1,50 @@
+// src/pages/PublicVerifyPage.js
 import React, { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { verifyCheckPublic } from "../api";
 
-export default function VerifyPage() {
+// ✅ Use CRA-style environment variable
+const API_BASE =
+  process.env.REACT_APP_API_URL || "https://invite-server-0gv6.onrender.com";
+
+async function verifyCheckPublic(token) {
+  const res = await fetch(`${API_BASE}/verify/json/check`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  return res.json();
+}
+
+async function markAsUsed(token) {
+  const res = await fetch(`${API_BASE}/verify/json/use`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  return res.json();
+}
+
+export default function PublicVerifyPage() {
   const { token } = useParams();
   const [loading, setLoading] = useState(true);
-  const [guest, setGuest] = useState(null);
+  const [invite, setInvite] = useState(null);
   const [error, setError] = useState("");
+  const [actionLoading, setActionLoading] = useState(false);
+  const [successMsg, setSuccessMsg] = useState("");
 
   useEffect(() => {
     const verifyToken = async () => {
       if (!token) {
-        setError("Invalid verification link.");
+        setError("Invalid or missing token.");
         setLoading(false);
         return;
       }
 
       try {
         const res = await verifyCheckPublic(token);
-        if (res.ok && res.guest) {
-          setGuest(res.guest);
+
+        if (res.ok && res.invite) {
+          setInvite(res.invite);
         } else {
           throw new Error(res.error || "This QR code is invalid or expired.");
         }
@@ -32,6 +57,26 @@ export default function VerifyPage() {
 
     verifyToken();
   }, [token]);
+
+  const handleMarkUsed = async () => {
+    if (!invite || invite.status === "USED") return;
+    setActionLoading(true);
+    setSuccessMsg("");
+
+    try {
+      const res = await markAsUsed(token);
+      if (res.ok && res.invite) {
+        setInvite(res.invite);
+        setSuccessMsg("✅ Guest has been successfully admitted.");
+      } else {
+        throw new Error(res.error || "Failed to mark as used.");
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -54,40 +99,72 @@ export default function VerifyPage() {
     );
   }
 
-  if (!guest) return null;
+  if (!invite) return null;
+
+  const statusColor =
+    invite.status === "USED"
+      ? "#dc2626"
+      : invite.status === "UNUSED"
+      ? "#16a34a"
+      : "#f59e0b";
 
   return (
     <div style={styles.container}>
       <div style={styles.card}>
-        <h2 style={{ color: "#16a34a" }}>✅ Verified Invitation</h2>
-        <p style={{ fontSize: 14, color: "#64748b", marginBottom: 10 }}>
+        <h2 style={{ color: statusColor }}>
+          {invite.status === "USED"
+            ? "❌ Already Used"
+            : "✅ Verified Invitation"}
+        </h2>
+        <p style={{ fontSize: 14, color: "#94a3b8", marginBottom: 10 }}>
           Dominion University, Ibadan
         </p>
 
         <p>
-          <b>Guest:</b> {guest.fullName || "Unknown"}
+          <b>Guest:</b> {invite.guestName || "Unknown"}
         </p>
         <p>
-          <b>Department:</b> {guest.department || "N/A"}
+          <b>Student:</b> {invite.studentName || "N/A"}
+        </p>
+        <p>
+          <b>Matric No:</b> {invite.matricNo || "N/A"}
         </p>
         <p>
           <b>Status:</b>{" "}
-          <span
-            style={{
-              color:
-                guest.status === "USED"
-                  ? "#dc2626"
-                  : guest.status === "PENDING"
-                  ? "#f59e0b"
-                  : "#16a34a",
-            }}
-          >
-            {guest.status}
-          </span>
+          <span style={{ color: statusColor }}>{invite.status}</span>
         </p>
 
+        {invite.usedAt && (
+          <p style={{ fontSize: 13, color: "#94a3b8" }}>
+            Used at: {new Date(invite.usedAt).toLocaleString()}
+          </p>
+        )}
+
+        {invite.status === "UNUSED" && (
+          <button
+            onClick={handleMarkUsed}
+            disabled={actionLoading}
+            style={{
+              marginTop: 20,
+              backgroundColor: "#16a34a",
+              color: "white",
+              padding: "10px 20px",
+              border: "none",
+              borderRadius: 8,
+              cursor: "pointer",
+              fontWeight: "bold",
+            }}
+          >
+            {actionLoading ? "Marking..." : "✅ Admit Guest"}
+          </button>
+        )}
+
+        {successMsg && (
+          <p style={{ color: "#16a34a", marginTop: 10 }}>{successMsg}</p>
+        )}
+
         <p style={{ fontSize: 13, marginTop: 20, color: "#94a3b8" }}>
-          🎓 You’re invited to the 3rd Convocation Ceremony.
+          🎓 Dominion University Convocation Ceremony
         </p>
         <p style={{ fontSize: 13, color: "#94a3b8" }}>🗓 October 21–26, 2025</p>
       </div>

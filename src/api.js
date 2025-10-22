@@ -44,6 +44,7 @@ function cleanToken(raw = "") {
 export async function verifyCheckPublic(token) {
   const cleanedToken = String(token || "")
     .trim()
+    .replace(/^.*(Admission Token[:\s]*)/i, "")
     .replace(/^.*\/verify\//, "")
     .replace(/[^A-Za-z0-9_-]/g, "");
 
