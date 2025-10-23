@@ -87,7 +87,7 @@ export async function createStudent(payload) {
 export async function verifyCheckPublic(token) {
   const cleanedToken = cleanToken(token);
   try {
-    const res = await fetch(`${API}/verify-json/check`, {
+    const res = await fetch(`${API}/verify/json/check`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: cleanedToken }),
@@ -143,7 +143,7 @@ export async function verifyCheck(token) {
 export async function verifyUseWithPin(token, pin) {
   const cleanedToken = cleanToken(token);
   try {
-    const res = await fetch(`${API}/verify-json/use-with-pin`, {
+    const res = await fetch(`${API}/verify/json/use-with-pin`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: cleanedToken, pin }),
