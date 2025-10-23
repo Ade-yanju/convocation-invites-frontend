@@ -32,35 +32,7 @@ async function authHeaders(extra = {}) {
 }
 
 /* ======================================================
-   🎓 ADMIN: CREATE STUDENT INVITES
-   ====================================================== */
-export async function createStudent(payload) {
-  try {
-    const response = await fetch(`${API}/admin/students`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Failed: ${response.status} ${text}`);
-    }
-
-    const data = await response.json();
-    if (!data.ok) {
-      throw new Error(data.error || "Server failed to generate invites");
-    }
-
-    return { ok: true, files: data.files || [] };
-  } catch (e) {
-    console.error("createStudent failed:", e);
-    return { ok: false, error: e.message || "Failed to create invites" };
-  }
-}
-
-/* ======================================================
-   🧹 TOKEN CLEANER (safe for Firestore)
+   🧹 CLEAN TOKEN (MATCHES BACKEND SANITIZER)
    ====================================================== */
 function cleanToken(raw = "") {
   if (!raw) return "";
@@ -81,48 +53,118 @@ function cleanToken(raw = "") {
 }
 
 /* ======================================================
-   ✅ PUBLIC: VERIFY INVITE TOKEN
+   🎓 CREATE STUDENT INVITES (ADMIN)
+   ====================================================== */
+export async function createStudent(payload) {
+  try {
+    const response = await fetch(`${API}/admin/students`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Failed: ${response.status} ${text}`);
+    }
+
+    const data = await response.json();
+
+    if (!data.ok) {
+      throw new Error(data.error || "Server failed to generate invites");
+    }
+
+    return { ok: true, files: data.files || [] };
+  } catch (e) {
+    console.error("createStudent failed:", e);
+    return { ok: false, error: e.message || "Failed to create invites" };
+  }
+}
+
+/* ======================================================
+   ✅ VERIFY TOKEN (PUBLIC)
    ====================================================== */
 export async function verifyCheckPublic(token) {
-  const cleaned = cleanToken(token);
+  const cleanedToken = cleanToken(token);
   try {
     const res = await fetch(`${API}/verify-json/check`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: cleaned }),
+      body: JSON.stringify({ token: cleanedToken }),
     });
     return await res.json();
   } catch (e) {
-    return { ok: false, error: e.message || "Network error" };
+    console.error("verifyCheckPublic failed:", e);
+    return { ok: false, error: e?.message || "Network error" };
   }
 }
 
 /* ======================================================
-   ✅ ADMIN/SCANNER: ADMIT GUEST WITH PIN
+   ✅ MARK INVITE AS USED (SCANNER / ADMIN)
    ====================================================== */
-export async function verifyUse(token, pin = "1234") {
-  const cleaned = cleanToken(token);
+export async function verifyUse(token) {
+  const cleanedToken = cleanToken(token);
   try {
     const res = await fetch(`${API}/verify-json/use-with-pin`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: cleaned, pin }),
+      body: JSON.stringify({
+        token: cleanedToken,
+        pin: "1234", // 🔹 Match process.env.GATE_PIN in backend
+      }),
     });
     return await res.json();
-  } catch (e) {
-    return { ok: false, error: e.message || "Network error" };
+  } catch (err) {
+    console.error("verifyUse failed:", err);
+    return { ok: false, error: err.message || "Network error" };
   }
 }
 
 /* ======================================================
-   🔐 AUTHENTICATION (Login, Logout, State)
+   ✅ VERIFY TOKEN (ADMIN-AUTHED VERSION)
+   ====================================================== */
+export async function verifyCheck(token) {
+  try {
+    const headers = await authHeaders({ "Content-Type": "application/json" });
+    const res = await fetch(`${API}/verify/json/check`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ token }),
+    });
+    return await res.json();
+  } catch (e) {
+    return { ok: false, error: e?.message || "Network error" };
+  }
+}
+
+/* ======================================================
+   ✅ USE TOKEN WITH CUSTOM PIN (SCANNER/GATE)
+   ====================================================== */
+export async function verifyUseWithPin(token, pin) {
+  const cleanedToken = cleanToken(token);
+  try {
+    const res = await fetch(`${API}/verify-json/use-with-pin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: cleanedToken, pin }),
+    });
+    return await res.json();
+  } catch (e) {
+    console.error("verifyUseWithPin failed:", e);
+    return { ok: false, error: e?.message || "Network error" };
+  }
+}
+
+/* ======================================================
+   🔐 AUTHENTICATION FUNCTIONS
    ====================================================== */
 export async function login(email, password) {
   try {
     await signInWithEmailAndPassword(auth, email, password);
     return { ok: true };
   } catch (e) {
-    return { ok: false, error: e.message || "Login failed" };
+    console.error("login failed:", e);
+    return { ok: false, error: e?.message || "Login failed" };
   }
 }
 
@@ -131,8 +173,12 @@ export async function logout() {
     await signOut(auth);
     return { ok: true };
   } catch (e) {
-    return { ok: false, error: e.message || "Logout failed" };
+    return { ok: false, error: e?.message || "Logout failed" };
   }
+}
+
+export function isAuthed() {
+  return !!auth.currentUser;
 }
 
 export function onAuth(cb) {
@@ -140,7 +186,7 @@ export function onAuth(cb) {
 }
 
 /* ======================================================
-   🧾 PDF DOWNLOAD HELPERS (Admin Dashboard)
+   📄 DOWNLOAD INVITE PDF (ADMIN)
    ====================================================== */
 export async function downloadInvitePdf(token) {
   try {
@@ -164,18 +210,19 @@ export async function downloadInvitePdf(token) {
     return { ok: true, blob };
   } catch (e) {
     console.error("downloadInvitePdf failed:", e);
-    return { ok: false, error: e.message || "Download failed" };
+    return { ok: false, error: e?.message || "Download failed" };
   }
 }
 
 /* ======================================================
-   🧩 FETCH FILE AS BLOB (for Cloudinary or direct URL)
+   🧩 FETCH DOWNLOAD AS BLOB (CLOUDINARY or REMOTE URL)
    ====================================================== */
 export async function fetchDownloadAsBlob(downloadUrl) {
   try {
+    const headers = await authHeaders();
     const res = await fetch(downloadUrl, {
       method: "GET",
-      headers: { "Content-Type": "application/json" },
+      headers,
       cache: "no-store",
     });
 
