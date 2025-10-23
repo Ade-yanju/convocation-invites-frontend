@@ -1,4 +1,3 @@
-// client/src/api.js
 import { auth } from "./firebaseClient";
 import {
   signInWithEmailAndPassword,
@@ -6,7 +5,9 @@ import {
   onAuthStateChanged,
 } from "firebase/auth";
 
-// 🌐 Base API URL
+/* ======================================================
+   🌍 BASE API CONFIGURATION
+   ====================================================== */
 export const API =
   process.env.REACT_APP_API ||
   (typeof window !== "undefined"
@@ -14,7 +15,9 @@ export const API =
     : "") ||
   "http://localhost:8080";
 
-// 🔑 Firebase auth header helper
+/* ======================================================
+   🔐 FIREBASE AUTH HELPERS
+   ====================================================== */
 async function idToken() {
   const u = auth.currentUser;
   return u ? await u.getIdToken(false) : null;
@@ -27,7 +30,10 @@ async function authHeaders(extra = {}) {
     ...extra,
   };
 }
-// client/src/api.js (add this near the bottom)
+
+/* ======================================================
+   🎓 ADMIN: CREATE STUDENT INVITES
+   ====================================================== */
 export async function createStudent(payload) {
   try {
     const response = await fetch(`${API}/admin/students`, {
@@ -42,7 +48,6 @@ export async function createStudent(payload) {
     }
 
     const data = await response.json();
-
     if (!data.ok) {
       throw new Error(data.error || "Server failed to generate invites");
     }
@@ -54,7 +59,9 @@ export async function createStudent(payload) {
   }
 }
 
-// 🧹 Token cleaner
+/* ======================================================
+   🧹 TOKEN CLEANER (safe for Firestore)
+   ====================================================== */
 function cleanToken(raw = "") {
   if (!raw) return "";
   let s = String(raw).trim();
@@ -73,9 +80,9 @@ function cleanToken(raw = "") {
   return s;
 }
 
-/**
- * ✅ Verify token (public)
- */
+/* ======================================================
+   ✅ PUBLIC: VERIFY INVITE TOKEN
+   ====================================================== */
 export async function verifyCheckPublic(token) {
   const cleaned = cleanToken(token);
   try {
@@ -90,9 +97,9 @@ export async function verifyCheckPublic(token) {
   }
 }
 
-/**
- * ✅ Admit guest with PIN
- */
+/* ======================================================
+   ✅ ADMIN/SCANNER: ADMIT GUEST WITH PIN
+   ====================================================== */
 export async function verifyUse(token, pin = "1234") {
   const cleaned = cleanToken(token);
   try {
@@ -107,9 +114,9 @@ export async function verifyUse(token, pin = "1234") {
   }
 }
 
-/* ==============================
-   🔐 Auth
-   ============================== */
+/* ======================================================
+   🔐 AUTHENTICATION (Login, Logout, State)
+   ====================================================== */
 export async function login(email, password) {
   try {
     await signInWithEmailAndPassword(auth, email, password);
@@ -130,4 +137,62 @@ export async function logout() {
 
 export function onAuth(cb) {
   return onAuthStateChanged(auth, cb);
+}
+
+/* ======================================================
+   🧾 PDF DOWNLOAD HELPERS (Admin Dashboard)
+   ====================================================== */
+export async function downloadInvitePdf(token) {
+  try {
+    const t = await idToken();
+    if (!t) return { ok: false, error: "Unauthorized" };
+
+    const res = await fetch(
+      `${API}/admin/download/${encodeURIComponent(token)}`,
+      {
+        method: "GET",
+        headers: { Authorization: `Bearer ${t}` },
+      }
+    );
+
+    if (!res.ok) {
+      const msg = await res.text().catch(() => res.statusText);
+      throw new Error(`Download failed: ${msg}`);
+    }
+
+    const blob = await res.blob();
+    return { ok: true, blob };
+  } catch (e) {
+    console.error("downloadInvitePdf failed:", e);
+    return { ok: false, error: e.message || "Download failed" };
+  }
+}
+
+/* ======================================================
+   🧩 FETCH FILE AS BLOB (for Cloudinary or direct URL)
+   ====================================================== */
+export async function fetchDownloadAsBlob(downloadUrl) {
+  try {
+    const res = await fetch(downloadUrl, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+    });
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      throw new Error(`Download failed: ${res.status} ${txt}`);
+    }
+
+    const blob = await res.blob();
+    return {
+      ok: true,
+      blob,
+      contentType:
+        res.headers.get("content-type") || "application/octet-stream",
+    };
+  } catch (e) {
+    console.error("fetchDownloadAsBlob failed:", e);
+    return { ok: false, error: e?.message || "Download failed" };
+  }
 }
